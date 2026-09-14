@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Omni.js - 100% Pure Scratch AI Engine</title>
+  <style>
+    :root {
+      --bg: #090a0f;
+      --card-bg: rgba(255, 255, 255, 0.04);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --glass-glow: rgba(120, 119, 198, 0.15);
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent-cyan: #06b6d4;
+      --accent-green: #10b981;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 30px 20px;
+      overflow-x: hidden;
+      background-image: 
+        radial-gradient(circle at 15% 10%, var(--glass-glow) 0%, transparent 40%),
+        radial-gradient(circle at 85% 90%, rgba(6, 182, 212, 0.1) 0%, transparent 40%);
+    }
+
+    .header-badge {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      padding: 6px 14px;
+      border-radius: 9999px;
+      color: #a5b4fc;
+      margin-bottom: 12px;
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin-bottom: 8px;
+      background: linear-gradient(180deg, #ffffff 0%, #a1a1aa 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .subtitle {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      margin-bottom: 30px;
+      text-align: center;
+      max-width: 600px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 950px;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 20px;
+    }
+
+    .card {
+      background: var(--card-bg);
+      backdrop-filter: blur(25px);
+      -webkit-backdrop-filter: blur(25px);
+      border: 1px solid var(--card-border);
+      border-radius: 20px;
+      padding: 24px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+    }
+
+    .model-loader-bar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 12px 16px;
+      color: white;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input[type="text"]:focus {
+      border-color: var(--primary);
+    }
+
+    button {
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      padding: 12px 22px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    button:hover {
+      background: var(--primary-hover);
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    .dropzone {
+      border: 2px dashed rgba(255, 255, 255, 0.15);
+      border-radius: 14px;
+      padding: 20px;
+      text-align: center;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: border-color 0.2s;
+      font-size: 0.85rem;
+    }
+
+    .dropzone:hover {
+      border-color: var(--primary);
+    }
+
+    .chat-box {
+      height: 280px;
+      background: rgba(0, 0, 0, 0.4);
+      border-radius: 14px;
+      padding: 18px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      font-size: 0.9rem;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .msg-user {
+      align-self: flex-end;
+      background: #4338ca;
+      color: white;
+      padding: 10px 16px;
+      border-radius: 14px 14px 2px 14px;
+      max-width: 75%;
+    }
+
+    .msg-ai {
+      align-self: flex-start;
+      background: rgba(255, 255, 255, 0.08);
+      color: #e5e7eb;
+      padding: 10px 16px;
+      border-radius: 14px 14px 14px 2px;
+      max-width: 75%;
+      white-space: pre-wrap;
+    }
+
+    .console-box {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.75rem;
+      background: #040508;
+      color: #34d399;
+      padding: 14px;
+      border-radius: 12px;
+      max-height: 120px;
+      overflow-y: auto;
+      line-height: 1.5;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.75rem;
+      color: var(--accent-green);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      background: var(--accent-green);
+      border-radius: 50%;
+      box-shadow: 0 0 8px var(--accent-green);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header-badge">100% Pure JS Engine • Zero External Libraries</div>
+  <h1>omni.js Universal Runtime</h1>
+  <p class="subtitle">Hand-crafted Protobuf parser, GGUF reader, Byte-Level BPE tokenizer, and WebGPU tensor execution graph from scratch.</p>
+
+  <div class="container">
+    <!-- Model Connection Card -->
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <span style="font-weight: 600; font-size: 0.95rem;">Model Source</span>
+        <div class="status-badge" id="engineStatus"><div class="status-dot"></div> WebGPU Active</div>
+      </div>
+
+      <div class="model-loader-bar">
+        <input type="text" id="modelInput" value="Xenova/gpt2" placeholder="HuggingFace ID or Raw URL">
+        <button id="loadHfBtn">Load Model</button>
+        <button id="loadTestBtn" class="btn-secondary">Test Tiny Model</button>
+      </div>
+
+      <div class="dropzone" id="dropArea">
+        Drag & Drop your <b>.onnx</b> or <b>.gguf</b> files directly into the engine
+      </div>
+    </div>
+
+    <!-- Playground Card -->
+    <div class="card">
+      <div style="font-weight: 600; font-size: 0.95rem; margin-bottom: 14px;">Inference Playground</div>
+      <div class="chat-box" id="chatBox">
+        <div class="msg-ai">Engine initialized. Load a model from Hugging Face or click "Test Tiny Model" to evaluate the full forward execution pipeline immediately without downloading!</div>
+      </div>
+
+      <div style="display: flex; gap: 10px; margin-top: 14px;">
+        <input type="text" id="promptInput" placeholder="Enter a prompt (e.g., 'The universe is')...">
+        <button id="generateBtn">Generate</button>
+      </div>
+    </div>
+
+    <!-- Live Execution Logs -->
+    <div class="card">
+      <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 8px; color: var(--text-muted);">
+        Hardware Pipeline Logs
+      </div>
+      <div class="console-box" id="consoleOutput">
+        [Omni Engine] Initialized in pure JavaScript.<br>
+      </div>
+    </div>
+  </div>
+
+  <script src="omni.js"></script>
+  <script>
+    let activeModel = null;
+    const logEl = document.getElementById("consoleOutput");
+    const chatBox = document.getElementById("chatBox");
+
+    function log(msg) {
+      logEl.innerHTML += `<div>&gt; ${msg}</div>`;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function appendMessage(role, text) {
+      const msg = document.createElement("div");
+      msg.className = role === "user" ? "msg-user" : "msg-ai";
+      msg.innerText = text;
+      chatBox.appendChild(msg);
+      chatBox.scrollTop = chatBox.scrollHeight;
+      return msg;
+    }
+
+    // Instant Tiny Model Test
+    document.getElementById("loadTestBtn").onclick = () => {
+      log("Spinning up scratch memory graph for Tiny 2-layer Transformer...");
+      activeModel = Omni.createTinyTestModel();
+      log("Tiny model generated. Handcrafted Gather -> GELU -> MatMul nodes ready.");
+      appendMessage("ai", "Instant Tiny model loaded! MatMul & GELU kernels are compiled and ready to generate.");
+    };
+
+    // HuggingFace / URL Loading
+    document.getElementById("loadHfBtn").onclick = async () => {
+      const target = document.getElementById("modelInput").value.trim();
+      log(`Starting universal resolution for: ${target}`);
+      try {
+        activeModel = await Omni.load(target, (p) => log(p));
+        appendMessage("ai", `Successfully parsed and loaded ${target} into custom memory map!`);
+      } catch (err) {
+        log(`Error loading model: ${err.message}`);
+        console.error(err);
+      }
+    };
+
+    // File Drag & Drop
+    const dropArea = document.getElementById("dropArea");
+    ["dragenter", "dragover"].forEach(event => {
+      dropArea.addEventListener(event, (e) => { e.preventDefault(); dropArea.style.borderColor = "#6366f1"; });
+    });
+    ["dragleave", "drop"].forEach(event => {
+      dropArea.addEventListener(event, (e) => { e.preventDefault(); dropArea.style.borderColor = "rgba(255, 255, 255, 0.15)"; });
+    });
+    dropArea.addEventListener("drop", async (e) => {
+      const file = e.dataTransfer.files[0];
+      if (!file) return;
+
+      log(`Reading local binary file: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)...`);
+      const buffer = await file.arrayBuffer();
+
+      activeModel = new MyTransformer();
+      if (file.name.endsWith(".onnx")) {
+        activeModel.loadFromONNX(buffer, null);
+        log("ONNX binary parsed via hand-crafted Protobuf reader.");
+      } else if (file.name.endsWith(".gguf")) {
+        activeModel.loadFromGGUF(buffer);
+        log("GGUF binary parsed via hand-crafted GGUF header extractor.");
+      }
+      appendMessage("ai", `Loaded file: ${file.name}`);
+    });
+
+    // Generation Loop
+    document.getElementById("generateBtn").onclick = async () => {
+      const prompt = document.getElementById("promptInput").value.trim();
+      if (!prompt) return;
+      if (!activeModel) {
+        alert("Please load a model or click 'Test Tiny Model' first!");
+        return;
+      }
+
+      appendMessage("user", prompt);
+      document.getElementById("promptInput").value = "";
+
+      const aiMsg = appendMessage("ai", "");
+      log(`Generating tokens for prompt: "${prompt}"...`);
+
+      const startTime = performance.now();
+      let generatedCount = 0;
+
+      await activeModel.generate(prompt, 15, (tokenStr, id) => {
+        aiMsg.innerText += tokenStr;
+        generatedCount++;
+      }, (nodeName, op) => {
+        log(`Executing Op: [${op}] on ${nodeName}`);
+      });
+
+      const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
+      log(`Completed ${generatedCount} tokens in ${elapsed}s (${(generatedCount / elapsed).toFixed(1)} tok/s).`);
+    };
+  </script>
+</body>
+</html>
