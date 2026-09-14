@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>omni.js - 100% From Scratch Transformer</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card: #161b22;
+      --border: #30363d;
+      --accent: #2ea043;
+      --accent-hover: #3fb950;
+      --text: #c9d1d9;
+      --text-bright: #ffffff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      padding: 1rem;
+      display: flex;
+      justify-content: center;
+    }
+    .container { width: 100%; max-width: 650px; }
+    header { margin-bottom: 1.5rem; text-align: center; }
+    h1 { color: var(--text-bright); font-size: 1.5rem; }
+    p.sub { font-size: 0.85rem; color: #8b949e; margin-top: 0.3rem; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.2rem;
+      margin-bottom: 1.2rem;
+    }
+    label { display: block; font-weight: 600; font-size: 0.85rem; margin-bottom: 0.4rem; }
+    textarea, input[type="text"] {
+      width: 100%;
+      background: #090d13;
+      border: 1px solid var(--border);
+      color: var(--text-bright);
+      padding: 0.6rem;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 0.9rem;
+      resize: vertical;
+    }
+    button {
+      background: var(--accent);
+      color: #ffffff;
+      border: none;
+      padding: 0.65rem 1.2rem;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 0.6rem;
+      width: 100%;
+      font-size: 0.95rem;
+      transition: background 0.2s;
+    }
+    button:hover:not(:disabled) { background: var(--accent-hover); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .progress-bar-container {
+      background: #090d13;
+      border-radius: 4px;
+      height: 8px;
+      width: 100%;
+      margin: 0.8rem 0;
+      overflow: hidden;
+      display: none;
+    }
+    .progress-bar { height: 100%; width: 0%; background: var(--accent); transition: width 0.1s; }
+    .status { font-family: monospace; font-size: 0.8rem; color: #8b949e; margin-top: 0.4rem; min-height: 1.2rem; }
+    .output-box {
+      background: #090d13;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.75rem;
+      min-height: 50px;
+      white-space: pre-wrap;
+      font-family: monospace;
+      font-size: 0.95rem;
+      color: #58a6ff;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>omni.js</h1>
+    <p class="sub">100% Pure Vanilla JS Transformer. Zero ONNX. Zero external dependencies.</p>
+  </header>
+
+  <!-- TRAINING SECTION -->
+  <div class="card">
+    <label for="trainData">1. Training Corpus (Overfits in browser in &lt;5s)</label>
+    <textarea id="trainData" rows="6">hello world
+how are you
+omni transformer
+pure javascript math
+artificial intelligence</textarea>
+    
+    <button id="trainBtn">Train Local Transformer</button>
+    <div class="progress-bar-container" id="progContainer">
+      <div class="progress-bar" id="progBar"></div>
+    </div>
+    <div class="status" id="trainStatus">Ready to train.</div>
+  </div>
+
+  <!-- INFERENCE SECTION -->
+  <div class="card">
+    <label for="promptInput">2. Test Prompt</label>
+    <input type="text" id="promptInput" value="hello" placeholder="Type prompt here...">
+    <button id="genBtn" disabled>Generate</button>
+
+    <label style="margin-top: 1rem;">3. Local Transformer Output</label>
+    <div class="output-box" id="output">Generated text will appear here...</div>
+  </div>
+</div>
+
+<script type="module">
+  import { Omni } from './omni.js';
+
+  let omniEngine = null;
+
+  const trainBtn = document.getElementById('trainBtn');
+  const genBtn = document.getElementById('genBtn');
+  const trainData = document.getElementById('trainData');
+  const promptInput = document.getElementById('promptInput');
+  const trainStatus = document.getElementById('trainStatus');
+  const progContainer = document.getElementById('progContainer');
+  const progBar = document.getElementById('progBar');
+  const output = document.getElementById('output');
+
+  trainBtn.addEventListener('click', async () => {
+    trainBtn.disabled = true;
+    genBtn.disabled = true;
+    progContainer.style.display = 'block';
+    output.innerText = 'Training in progress...';
+
+    // Initialize clean local model instance
+    omniEngine = await Omni.create({ dModel: 32, nHeads: 2, nLayers: 1, maxSeqLen: 32 });
+    
+    // Parse text data
+    const text = trainData.value.trim();
+    omniEngine.initVocab(text);
+    const lines = text.split('\n').filter(l => l.length > 1);
+
+    const epochs = 120;
+    const t0 = performance.now();
+
+    for (let ep = 0; ep < epochs; ep++) {
+      let epochLoss = 0;
+      let count = 0;
+
+      for (const line of lines) {
+        const full = line + '\n';
+        const tokens = omniEngine.tokenizer.encode(full);
+        if (tokens.length < 2) continue;
+
+        // Next-token prediction pairs: input -> target
+        const inp = tokens.slice(0, tokens.length - 1);
+        const tgt = tokens.slice(1);
+
+        const loss = omniEngine.model.trainStep(inp, tgt, 0.02);
+        epochLoss += loss;
+        count++;
+      }
+
+      if (ep % 5 === 0 || ep === epochs - 1) {
+        const pct = Math.round(((ep + 1) / epochs) * 100);
+        progBar.style.width = pct + '%';
+        const avgLoss = (epochLoss / count).toFixed(4);
+        trainStatus.innerText = `Epoch ${ep + 1}/${epochs} | Loss: ${avgLoss}`;
+        // Let the mobile UI breathe & update visually
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+    trainStatus.innerText = `Finished in ${elapsed}s! Vocab size: ${omniEngine.tokenizer.vocabSize}`;
+    trainBtn.disabled = false;
+    genBtn.disabled = false;
+    output.innerText = 'Model trained successfully! Click "Generate" to sample.';
+  });
+
+  genBtn.addEventListener('click', () => {
+    if (!omniEngine || !omniEngine.model) return;
+    const prompt = promptInput.value;
+    const generated = omniEngine.model.generate(prompt, 30, omniEngine.tokenizer, 0.3);
+    output.innerText = generated;
+  });
+</script>
+</body>
+</html>
