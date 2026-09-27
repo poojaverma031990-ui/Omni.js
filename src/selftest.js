@@ -120,6 +120,29 @@ export function selfTest() {
     return close(got, CK2.cpuGelu(A.read()), 5e-4);
   });
 
+  test('rmsnorm (Llama family)', () => {
+    const rows = 3, cols = 10;
+    const A = t([rows, cols], 30);
+    const g = new Tensor([cols], randF32(cols, 31).map(v => 1 + v * 0.2));
+    const got = readOf(() => A.rmsnorm(g, 1e-5));
+    const ref = CK2.cpuRMSNorm(A.read(), rows, cols, g.read(), 1e-5);
+    return close(got, ref, 5e-4);
+  });
+
+  test('mul (elementwise)', () => {
+    const A = t([2, 9], 32), B = t([2, 9], 33);
+    const got = readOf(() => A.mul(B));
+    const ref = CK2.cpuMul(A.read(), B.read());
+    return close(got, ref);
+  });
+
+  test('rope (Llama RoPE)', () => {
+    const A = t([3, 12], 34); // 3 tokens, 12 cols = 2 heads x headDim 6
+    const got = readOf(() => A.rope(5, 6, 10000.0));
+    const ref = CK2.cpuRope(A.read(), 3, 12, 6, 5, 10000.0);
+    return close(got, ref, 5e-4);
+  });
+
   test('add / addRowBias / scale', () => {
     const A = t([2, 6], 12), B = t([2, 6], 13);
     const bias = new Tensor([6], randF32(6, 14));

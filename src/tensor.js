@@ -319,6 +319,48 @@ export class Tensor {
     return out;
   }
 
+  /** RMSNorm (Llama family): y = x * g / sqrt(mean(x²)+eps). */
+  rmsnorm(gamma, eps = 1e-5) {
+    const out = Tensor.zeros(this.shape.slice());
+    if (this.backend === 'webgl') {
+      getGL().run('rmsnorm', out.tex, out._texW, out._texH,
+        [['A', this.tex], ['G', gamma.tex]],
+        { iC: this.cols, uEps: eps });
+    } else {
+      out.data.set(CK.cpuRMSNorm(this.data, this.rows, this.cols, gamma.data, eps));
+    }
+    return out;
+  }
+
+  /** Elementwise multiply (same shape). */
+  mul(o) {
+    const out = Tensor.zeros(this.shape.slice());
+    if (this.backend === 'webgl') {
+      getGL().run('mul', out.tex, out._texW, out._texH,
+        [['A', this.tex], ['B', o.tex]], { iC: this.cols });
+    } else {
+      out.data.set(CK.cpuMul(this.data, o.data));
+    }
+    return out;
+  }
+
+  /**
+   * Rotary position embedding (Llama family). headDim = dim per head;
+   * this tensor is [rows, headDim * nHeads]; pos0 = position of first row.
+   * theta = rope base (e.g. 10000, 500000).
+   */
+  rope(pos0, headDim, theta = 10000.0) {
+    const out = Tensor.zeros(this.shape.slice());
+    if (this.backend === 'webgl') {
+      getGL().run('rope', out.tex, out._texW, out._texH,
+        [['A', this.tex]],
+        { iC: this.cols, iHeadDim: headDim, uTheta: theta, uPos0: pos0 });
+    } else {
+      out.data.set(CK.cpuRope(this.data, this.rows, this.cols, headDim, pos0, theta));
+    }
+    return out;
+  }
+
   /** Add attention-mask matrix (same shape) — used before softmax. */
   addMask(mask) { return this.add(mask); }
 

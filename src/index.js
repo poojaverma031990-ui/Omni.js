@@ -18,9 +18,11 @@ export { GLBackend } from './webgl-backend.js';
 export { parseSafetensors } from './safetensors.js';
 export { Tokenizer, createTokenizer } from './tokenizer.js';
 export { env, downloadFile, clearCache } from './hub.js';
-export { GPT2Model, BertModel, DistilBertModel } from './models.js';
-export { generateTokens } from './generation.js';
-export { pipeline, ready, disposePipeline, TextGenerationPipeline, FeatureExtractionPipeline, TextClassificationPipeline, FillMaskPipeline } from './pipelines.js';
+export { GPT2Model, BertModel, DistilBertModel, LlamaModel, RobertaModel } from './models.js';
+export { generateTokens, generateAsync } from './generation.js';
+export { pipeline, ready, disposePipeline, TextGenerationPipeline, FeatureExtractionPipeline, TextClassificationPipeline, TokenClassificationPipeline, FillMaskPipeline, QuestionAnsweringPipeline } from './pipelines.js';
+import { buildChatPrompt, renderChatTemplate } from './chat-template.js';
+export { buildChatPrompt, renderChatTemplate };
 export * from './pipelines.js';
 import { selfTest, initBackend } from './selftest.js';
 export { selfTest, initBackend };
@@ -99,6 +101,9 @@ const mini = {
   initBackend,
   generate,
   generateTokens,
+  generateAsync,
+  buildChatPrompt,
+  renderChatTemplate,
   embed,
   classify,
   fillMask,

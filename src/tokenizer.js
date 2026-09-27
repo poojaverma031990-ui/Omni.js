@@ -342,6 +342,20 @@ export class Tokenizer {
   tokenize(text) {
     return this.encode(text).map(id => this.idToToken.get(id) ?? '<unk>');
   }
+
+  /**
+   * Apply the model's chat template to a conversation.
+   * messages: [{role:'system'|'user'|'assistant', content}, ...]
+   * Uses the repo's real Jinja template (subset renderer) when present,
+   * otherwise a builtin ChatML / Llama-2 / Llama-3 / Gemma template.
+   */
+  applyChatTemplate(messages, { addGenerationPrompt = true, modelType = null } = {}) {
+    return buildChatPrompt(messages, {
+      template: this.chatTemplate,
+      modelType: modelType || this.modelType,
+      addGenerationPrompt,
+    });
+  }
 }
 
 /** Convenience: build from fetched files. */

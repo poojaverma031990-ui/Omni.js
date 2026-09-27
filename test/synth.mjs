@@ -138,7 +138,7 @@ export function makeGPT2Files({
  * Tiny BERT with WordPiece tokenizer + MLM head + 2-label classification head.
  */
 export function makeBertFiles({
-  seed = 7, nLayer = 2, nHead = 2, dim = 16, inter = 24, maxPos = 32, typeVocab = 2,
+  seed = 7, nLayer = 2, nHead = 2, dim = 16, inter = 24, maxPos = 32, typeVocab = 2, qa = false,
 } = {}) {
   const rng = mulberry32(seed + 100);
   const vocab = new Map();
@@ -176,9 +176,12 @@ export function makeBertFiles({
   w('cls.predictions.decoder.weight', [V, dim]); zeros('cls.predictions.bias', [V]);
   // classification head (2 labels)
   w('classifier.weight', [2, dim]); zeros('classifier.bias', [2]);
+  if (qa) {
+    w('qa_outputs.weight', [2, dim]); zeros('qa_outputs.bias', [2]);
+  }
 
   const config = {
-    architectures: ['BertForMaskedLM'],
+    architectures: [qa ? 'BertForQuestionAnswering' : 'BertForMaskedLM'],
     model_type: 'bert',
     num_hidden_layers: nLayer, num_attention_heads: nHead, hidden_size: dim,
     intermediate_size: inter, vocab_size: V, max_position_embeddings: maxPos,
@@ -243,3 +246,134 @@ export function serveFiles(files, port = 0) {
     });
   });
 }
+
+/**
+ * Tiny LLAMA-family model (RMSNorm + RoPE + SwiGLU + GQA: nKV < nQ).
+ * Reuses a GPT-2-style tokenizer.json (fine — the pipeline only needs a valid one).
+ */
+export function makeLlamaFiles({
+  seed = 21, nLayer = 2, nHead = 4, nKV = 2, dim = 16, inter = 24, maxPos = 512,
+} = {}) {
+  const gpt2 = makeGPT2Files({ seed, nLayer: 1, nHead: 1, nEmb: 8, maxPos: 8 });
+  const vocab = gpt2.vocab;
+  const V = vocab.size;
+  const rng = mulberry32(seed + 777);
+  const headDim = dim / nHead;
+  const entries = [];
+  const w = (name, shape, scale = 0.2) => {
+    const data = new Float32Array(shape.reduce((a, b) => a * b, 1));
+    for (let i = 0; i < data.length; i++) data[i] = randn(rng) * scale;
+    entries.push({ name, shape, data });
+  };
+  const ones = (name, shape) => entries.push({ name, shape, data: new Float32Array(shape.reduce((a, b) => a * b, 1)).fill(1) });
+
+  w('model.embed_tokens.weight', [V, dim]);
+  for (let i = 0; i < nLayer; i++) {
+    const p = `model.layers.${i}`;
+    ones(`${p}.input_layernorm.weight`, [dim]);
+    w(`${p}.self_attn.q_proj.weight`, [nHead * headDim, dim]);
+    w(`${p}.self_attn.k_proj.weight`, [nKV * headDim, dim]);
+    w(`${p}.self_attn.v_proj.weight`, [nKV * headDim, dim]);
+    w(`${p}.self_attn.o_proj.weight`, [dim, nHead * headDim]);
+    ones(`${p}.post_attention_layernorm.weight`, [dim]);
+    w(`${p}.mlp.gate_proj.weight`, [inter, dim]);
+    w(`${p}.mlp.up_proj.weight`, [inter, dim]);
+    w(`${p}.mlp.down_proj.weight`, [dim, inter]);
+  }
+  ones('model.norm.weight', [dim]);
+  // tie_word_embeddings: true → no lm_head
+
+  const config = {
+    architectures: ['LlamaForCausalLM'],
+    model_type: 'llama',
+    hidden_size: dim, num_hidden_layers: nLayer,
+    num_attention_heads: nHead, num_key_value_heads: nKV,
+    intermediate_size: inter, head_dim: headDim,
+    vocab_size: V, max_position_embeddings: maxPos,
+    rms_norm_eps: 1e-5, rope_theta: 10000.0,
+    tie_word_embeddings: true, hidden_act: 'silu',
+    bos_token_id: 0, eos_token_id: 0,
+  };
+  const st = writeSafetensors(entries.map(e => [e.name, e]));
+  return {
+    files: {
+      'config.json': JSON.stringify(config),
+      'tokenizer.json': gpt2.files['tokenizer.json'],
+      'tokenizer_config.json': gpt2.files['tokenizer_config.json'],
+      'model.safetensors': st,
+    },
+    vocab, config,
+  };
+}
+
+/** Tiny RoBERTa with a 3-label classification head. */
+export function makeRobertaFiles({
+  seed = 31, nLayer = 2, nHead = 2, dim = 16, inter = 24, maxPos = 32, numLabels = 3,
+} = {}) {
+  const rng = mulberry32(seed + 55);
+  const vocab = new Map();
+  const toks = ['<s>', '<pad>', '</s>', '<unk>', '<mask>', 'the', 'cat', '##s', 'dog', 'big', 'small', 'a', 'runs', '.', 'hello', 'world'];
+  toks.forEach((t, i) => vocab.set(t, i));
+  const V = vocab.size;
+  const entries = [];
+  const w = (name, shape, scale = 0.2) => {
+    const data = new Float32Array(shape.reduce((a, b) => a * b, 1));
+    for (let i = 0; i < data.length; i++) data[i] = randn(rng) * scale;
+    entries.push({ name, shape, data });
+  };
+  const ones = (name, shape) => entries.push({ name, shape, data: new Float32Array(shape.reduce((a, b) => a * b, 1)).fill(1) });
+  const zeros = (name, shape) => entries.push({ name, shape, data: new Float32Array(shape.reduce((a, b) => a * b, 1)) });
+
+  w('roberta.embeddings.word_embeddings.weight', [V, dim]);
+  w('roberta.embeddings.position_embeddings.weight', [maxPos, dim]);
+  w('roberta.embeddings.token_type_embeddings.weight', [1, dim]);
+  ones('roberta.embeddings.LayerNorm.weight', [dim]); zeros('roberta.embeddings.LayerNorm.bias', [dim]);
+  for (let i = 0; i < nLayer; i++) {
+    const p = `roberta.encoder.layer.${i}`;
+    w(`${p}.attention.self.query.weight`, [dim, dim]); zeros(`${p}.attention.self.query.bias`, [dim]);
+    w(`${p}.attention.self.key.weight`, [dim, dim]); zeros(`${p}.attention.self.key.bias`, [dim]);
+    w(`${p}.attention.self.value.weight`, [dim, dim]); zeros(`${p}.attention.self.value.bias`, [dim]);
+    w(`${p}.attention.output.dense.weight`, [dim, dim]); zeros(`${p}.attention.output.dense.bias`, [dim]);
+    ones(`${p}.attention.output.LayerNorm.weight`, [dim]); zeros(`${p}.attention.output.LayerNorm.bias`, [dim]);
+    w(`${p}.intermediate.dense.weight`, [inter, dim]); zeros(`${p}.intermediate.dense.bias`, [inter]);
+    w(`${p}.output.dense.weight`, [dim, inter]); zeros(`${p}.output.dense.bias`, [dim]);
+    ones(`${p}.output.LayerNorm.weight`, [dim]); zeros(`${p}.output.LayerNorm.bias`, [dim]);
+  }
+  // Roberta classification head: dense + out_proj
+  w('classifier.dense.weight', [dim, dim]); zeros('classifier.dense.bias', [dim]);
+  w('classifier.out_proj.weight', [numLabels, dim]); zeros('classifier.out_proj.bias', [numLabels]);
+
+  const config = {
+    architectures: ['RobertaForSequenceClassification'],
+    model_type: 'roberta',
+    num_hidden_layers: nLayer, num_attention_heads: nHead, hidden_size: dim,
+    intermediate_size: inter, vocab_size: V, max_position_embeddings: maxPos,
+    type_vocab_size: 1, layer_norm_eps: 1e-5, pad_token_id: 1,
+    id2label: { 0: 'negative', 1: 'neutral', 2: 'positive' },
+  };
+  const tokenizerJson = {
+    version: '1.0',
+    added_tokens: [0, 1, 2, 3, 4].map(id => ({
+      id, special: true, content: toks[id], single_word: false, lstrip: false, rstrip: false, normalized: false,
+    })),
+    normalizer: null,
+    pre_tokenizer: { type: 'ByteLevel' },
+    model: {
+      type: 'BPE', dropout: null, unk_token: null,
+      vocab: Object.fromEntries(vocab),
+      merges: [['t', 'h'], ['th', 'e']], // minimal merges
+    },
+  };
+  const tokenizerConfig = { unk_token: '<unk>', pad_token: '<pad>', bos_token: '<s>', eos_token: '</s>', mask_token: '<mask>' };
+  const st = writeSafetensors(entries.map(e => [e.name, e]));
+  return {
+    files: {
+      'config.json': JSON.stringify(config),
+      'tokenizer.json': JSON.stringify(tokenizerJson),
+      'tokenizer_config.json': JSON.stringify(tokenizerConfig),
+      'model.safetensors': st,
+    },
+    vocab, config,
+  };
+}
+

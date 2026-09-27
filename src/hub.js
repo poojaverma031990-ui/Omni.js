@@ -1,8 +1,10 @@
 /**
  * mini.js — Model Hub: streams files from the Hugging Face Hub with progress,
  * caches them in the browser Cache API (repeat runs are instant), no deps.
+ * Supports sharded safetensors models (model.safetensors.index.json).
  */
 import { concatBytes, ProgressEmitter } from './utils.js';
+import { parseSafetensors } from './safetensors.js';
 
 const HF_BASE = 'https://huggingface.co';
 
@@ -94,11 +96,12 @@ async function fetchJSON(repo, filename) {
 
 /**
  * Download everything a repo needs: config, tokenizer files, weights.
- * Returns {config, tokenizerConfig, tokenizerJson, weightsBytes, weightFile}
+ * Supports single `model.safetensors` AND sharded models via
+ * `model.safetensors.index.json` (weight_map → multiple shard files).
+ * Returns {config, tokenizerConfig, tokenizerJson, tensors: Map, weightFiles}
  */
 export async function downloadModel(repo, { progressCallback = null, weightFile = null } = {}) {
   const files = {};
-  const tasks = [];
   const grabJSON = async (name) => {
     try { files[name] = await fetchJSON(repo, name); } catch (_) { files[name] = null; }
   };
@@ -108,22 +111,41 @@ export async function downloadModel(repo, { progressCallback = null, weightFile 
     grabJSON('special_tokens_map.json'),
   ]);
 
-  // weights: prefer safetensors. Try explicit file, then common names.
-  const candidates = weightFile ? [weightFile] : ['model.safetensors', 'py_model.safetensors'];
-  let weightsBytes = null;
-  let usedFile = null;
-  let lastErr = null;
-  for (const f of candidates) {
-    try {
-      weightsBytes = await downloadFile(repo, f, { progressCallback });
-      usedFile = f;
-      break;
-    } catch (e) {
-      lastErr = e;
+  const dlOpts = { progressCallback };
+
+  // ── sharded safetensors? ──
+  let index = null;
+  try { index = await fetchJSON(repo, 'model.safetensors.index.json'); } catch (_) { /* single-file */ }
+
+  let tensors = null;
+  const weightFiles = [];
+  if (index && index.weight_map) {
+    const shardNames = [...new Set(Object.values(index.weight_map))];
+    for (const shard of shardNames) {
+      const bytes = await downloadFile(repo, shard, dlOpts);
+      const parsed = parseSafetensors(bytes);
+      if (!tensors) tensors = parsed.tensors;
+      else for (const [k, v] of parsed.tensors) tensors.set(k, v);
+      weightFiles.push(shard);
     }
-  }
-  if (!weightsBytes) {
-    throw lastErr || new Error('[mini.js] no safetensors weights found in ' + repo);
+    // sanity: every mapped tensor must exist
+    for (const name of Object.keys(index.weight_map)) {
+      if (!tensors.has(name)) throw new Error(`[mini.js] shard index references missing tensor "${name}"`);
+    }
+  } else {
+    const candidates = weightFile ? [weightFile] : ['model.safetensors'];
+    let lastErr = null;
+    for (const f of candidates) {
+      try {
+        const bytes = await downloadFile(repo, f, dlOpts);
+        tensors = parseSafetensors(bytes).tensors;
+        weightFiles.push(f);
+        break;
+      } catch (e) { lastErr = e; }
+    }
+    if (!tensors) {
+      throw lastErr || new Error('[mini.js] no safetensors weights found in ' + repo);
+    }
   }
 
   // tokenizer.json (may be missing on very old repos)
@@ -134,8 +156,8 @@ export async function downloadModel(repo, { progressCallback = null, weightFile 
     config: files['config.json'],
     tokenizerConfig: files['tokenizer_config.json'] || files['special_tokens_map.json'] || {},
     tokenizerJson: files['tokenizer.json'],
-    weightsBytes,
-    weightFile: usedFile,
+    tensors,
+    weightFiles,
   };
 }
 

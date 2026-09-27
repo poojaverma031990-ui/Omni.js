@@ -72,6 +72,9 @@
         <option value="tiny">hf-internal-testing/tiny-random-gpt2 · &lt;1 MB · instant text-generation test</option>
         <option value="sst2">distilbert/…-sst-2-english · ~268 MB · sentiment (91% acc)</option>
         <option value="mlm">distilbert/distilbert-base-uncased · ~268 MB · fill-mask</option>
+        <option value="chat">⭐ HuggingFaceTB/SmolLM2-135M-Instruct · ~269 MB · real LLM chat (Llama arch)</option>
+        <option value="chat2">Qwen/Qwen2.5-0.5B-Instruct · ~988 MB · real LLM chat (Qwen2 arch)</option>
+        <option value="qa">distilbert/…-distilled-squad · ~268 MB · question answering</option>
       </select>
       <button class="btn-p" id="loadBtn">⬇ Load model</button>
     </div>
@@ -146,6 +149,32 @@
     <div class="out" id="mlmOut" hidden><div class="head"><span>Top predictions</span><span class="kv" id="mlmTime"></span></div><div class="body" id="mlmBody"></div></div>
   </div>
 
+  <!-- ── LLM chat panel ── -->
+  <div class="card" id="panel-chat" hidden>
+    <label class="kv">Multi-turn chat — SmolLM2 (a real instruct LLM, Llama architecture: RMSNorm + RoPE + SwiGLU + GQA). Replies stream token-by-token. Press <b>Stop</b> to cut a reply short.</label>
+    <div class="out" id="chatLog" style="margin-top:10px"><div class="body" id="chatBody" style="min-height:60px">You: hi 👋</div></div>
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="chatInput" style="flex:1;min-width:200px" placeholder="Type a message…" value="Say hello and tell me what you are.">
+      <button class="btn-p" id="chatSend">Send</button>
+      <button class="btn-g" id="chatStop">Stop</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="kv">Temperature <input type="number" id="chatTemp" value="0.7" step="0.1" min="0" max="2" style="width:70px"></label>
+      <label class="kv">Max new tokens <input type="number" id="chatMax" value="120" style="width:80px"></label>
+      <button class="btn-g" id="chatReset" style="margin-left:auto">Reset conversation</button>
+    </div>
+  </div>
+
+  <!-- ── QA panel ── -->
+  <div class="card" id="panel-qa" hidden>
+    <label class="kv">Question</label>
+    <input type="text" id="qaQuestion" style="width:100%" value="Which name is also used to describe the Amazon rainforest in English?">
+    <label class="kv" style="display:block;margin-top:8px">Context</label>
+    <textarea id="qaContext" rows="4">The Amazon rainforest, also known in English as Amazonia or the Amazon Jungle, is a moist broadleaf forest that covers most of the Amazon basin of South America. This basin encompasses 7,000,000 square kilometres, of which 5,500,000 are covered by the rainforest. The majority of the forest is contained within Brazil.</textarea>
+    <button class="btn-p" id="qaBtn" style="margin-top:10px">Answer</button>
+    <div class="out" id="qaOut" hidden><div class="head"><span>Extractive answer</span><span class="kv" id="qaTime"></span></div><div class="body" id="qaBody"></div></div>
+  </div>
+
   <div class="foot">
     engine: <code>mini.js v1.0</code> — 100% hand-written HTML/CSS/JS · WebGL2 kernels + CPU fallback ·
     models by their authors on huggingface.co (Apache-2.0 / MIT) · nothing you type leaves this page
@@ -167,6 +196,9 @@ const MODELS = {
   tiny: { repo: 'hf-internal-testing/tiny-random-gpt2',   task: 'text-generation',    size: 500000 },
   sst2: { repo: 'distilbert/distilbert-base-uncased-finetuned-sst-2-english', task: 'text-classification', size: 268000000 },
   mlm:  { repo: 'distilbert/distilbert-base-uncased',     task: 'fill-mask',          size: 268000000 },
+  chat: { repo: 'HuggingFaceTB/SmolLM2-135M-Instruct',    task: 'text-generation',    size: 269000000 },
+  chat2:{ repo: 'Qwen/Qwen2.5-0.5B-Instruct',             task: 'text-generation',    size: 988000000 },
+  qa:   { repo: 'distilbert/distilbert-base-uncased-distilled-squad', task: 'question-answering', size: 268000000 },
 };
 const CORPUS = [
   'The cat sat on the mat and purred softly',
@@ -179,8 +211,24 @@ const CORPUS = [
   'The match ended in a dramatic penalty shootout',
 ];
 
-const Demo = { pipe: null, key: '', corpusVecs: null, MODELS };
+const Demo = { pipe: null, key: '', corpusVecs: null, MODELS, convo: [], stopFlag: false };
 Demo.CORPUS = CORPUS;
+Demo.runChat = async function* (userMsg, opts) {
+  Demo.convo.push({ role: 'user', content: userMsg });
+  const stream = [];
+  const gen = await Demo.pipe.chat(Demo.convo, {
+    max_new_tokens: opts.max, temperature: opts.temp, do_sample: opts.temp > 0,
+    onText: (delta, full) => stream.push(full),
+  });
+  const reply = gen[0].assistant_message;
+  Demo.convo.push({ role: 'assistant', content: reply });
+  return reply;
+};
+Demo.runQA = async function (question, context) {
+  const t0 = performance.now();
+  const [r] = await Demo.pipe({ question, context });
+  return { answer: r.answer, score: r.score, ms: performance.now() - t0 };
+};
 
 function fmtMB(n) { return (n / 1048576).toFixed(1) + ' MB'; }
 function setStatus(msg, cls) { const el = $('#status'); el.textContent = msg; el.className = 'status' + (cls ? ' ' + cls : ''); }
@@ -224,7 +272,13 @@ Demo.loadSelected = async function () {
 };
 
 function showPanel(key) {
-  ['st', 'tiny', 'sst2', 'mlm'].forEach(k => { $('#panel-' + k).hidden = (k !== key); });
+  ['st', 'tiny', 'sst2', 'mlm', 'chat', 'chat2', 'qa'].forEach(k => {
+    const el = document.querySelector('#panel-' + k);
+    if (el) el.hidden = (k !== key);
+  });
+  if (key === 'chat2' && document.querySelector('#panel-chat')) {
+    document.querySelector('#panel-chat').hidden = false; // shared chat panel
+  }
   if (key === 'st') switchDemo('search');
 }
 
@@ -401,6 +455,61 @@ function wire() {
     kv.textContent = 'best sentence: ' + (r.results[0] ? r.results[0].sequence : '—');
     $('#mlmBody').appendChild(kv);
     $('#mlmTime').textContent = r.ms.toFixed(0) + ' ms';
+    setStatus('Done — computed locally. ✔', 'ok');
+  }));
+
+  // ── chat ──
+  let chatTranscript = '';
+  $('#chatSend').addEventListener('click', guard(async () => {
+    const input = $('#chatInput');
+    const msg = input.value.trim();
+    if (!msg || !Demo.pipe) return;
+    input.value = '';
+    const body = $('#chatBody');
+    chatTranscript += (chatTranscript ? '\n\n' : '') + 'You: ' + msg + '\n\nAssistant: ';
+    body.textContent = chatTranscript;
+    const cur = document.createElement('span'); cur.className = 'cursor'; body.appendChild(cur);
+    Demo.stopFlag = false;
+    let shown = chatTranscript.length;
+    let nTokens = 0;
+    const t0 = performance.now();
+    const convo = Demo.convo.concat([{ role: 'user', content: msg }]);
+    let full = '';
+    const result = await Demo.pipe.chat(convo, {
+      max_new_tokens: parseInt($('#chatMax').value, 10) || 120,
+      temperature: parseFloat($('#chatTemp').value) || 0.7,
+      onText: (delta, fullText) => {
+        if (Demo.stopFlag) return false;
+        nTokens++;
+        full = fullText;
+        body.textContent = chatTranscript + fullText;
+        body.appendChild(cur);
+      },
+    });
+    cur.remove();
+    const reply = result[0].assistant_message;
+    Demo.convo = convo.concat([{ role: 'assistant', content: reply }]);
+    chatTranscript = chatTranscript + reply;
+    body.textContent = chatTranscript;
+    const secs = (performance.now() - t0) / 1000;
+    setStatus('Done — ' + nTokens + ' tokens · ' + secs.toFixed(1) + 's · ' + (nTokens / Math.max(secs, .001)).toFixed(1) + ' tok/s. ✔', 'ok');
+  }));
+  $('#chatStop').addEventListener('click', () => { Demo.stopFlag = true; });
+  $('#chatReset').addEventListener('click', () => { Demo.convo = []; chatTranscript = ''; $('#chatBody').textContent = ''; });
+
+  // ── question answering ──
+  $('#qaBtn').addEventListener('click', guard(async () => {
+    $('#qaOut').hidden = false;
+    $('#qaBody').textContent = 'Reading the passage…';
+    const r = await Demo.runQA($('#qaQuestion').value, $('#qaContext').value);
+    $('#qaBody').innerHTML = '';
+    const ans = document.createElement('div');
+    ans.style.fontWeight = '700'; ans.style.fontSize = '16px';
+    ans.textContent = r.answer || '(no answer found)';
+    const kv = document.createElement('div'); kv.className = 'kv';
+    kv.textContent = 'confidence: ' + (r.score * 100).toFixed(1) + '%';
+    $('#qaBody').appendChild(ans); $('#qaBody').appendChild(kv);
+    $('#qaTime').textContent = r.ms.toFixed(0) + ' ms';
     setStatus('Done — computed locally. ✔', 'ok');
   }));
 

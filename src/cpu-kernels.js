@@ -190,3 +190,52 @@ export function cpuAppendRow(dst, dstStride, src, srcLen, row) {
 export function cpuRowOf(strided, stride, row, cols) {
   return strided.subarray(row * stride, row * stride + cols);
 }
+
+/** RMSNorm: y = x * g / sqrt(mean(x^2) + eps). rows x cols, no bias. */
+export function cpuRMSNorm(x, rows, cols, g, eps) {
+  const out = new Float32Array(rows * cols);
+  const inv = 1 / cols;
+  for (let r = 0; r < rows; r++) {
+    const off = r * cols;
+    let ss = 0;
+    for (let c = 0; c < cols; c++) ss += x[off + c] * x[off + c];
+    const rstd = 1 / Math.sqrt(ss * inv + eps);
+    for (let c = 0; c < cols; c++) out[off + c] = x[off + c] * rstd * g[c];
+  }
+  return out;
+}
+
+/** Elementwise multiply of two same-length arrays. */
+export function cpuMul(a, b) {
+  const out = new Float32Array(a.length);
+  for (let i = 0; i < a.length; i++) out[i] = a[i] * b[i];
+  return out;
+}
+
+/**
+ * Rotary position embedding (RoPE), applied in place to q/k tensors of shape
+ * [rows, headDim * nHeads]. Interleaved-half convention used by Llama/Mistral/
+ * Qwen/Gemma: pairs (t, t+half) inside each head rotate by angle
+ * pos * theta^(-2t/half). Returns a NEW Float32Array.
+ */
+export function cpuRope(x, rows, cols, headDim, pos0, theta) {
+  const out = new Float32Array(rows * cols);
+  const half = headDim >> 1;
+  for (let r = 0; r < rows; r++) {
+    const pos = pos0 + r;
+    const off = r * cols;
+    const nHeads = cols / headDim;
+    for (let h = 0; h < nHeads; h++) {
+      const hOff = off + h * headDim;
+      for (let t = 0; t < half; t++) {
+        const invFreq = Math.pow(theta, (-2 * t) / half);
+        const ang = pos * invFreq;
+        const c = Math.cos(ang), s = Math.sin(ang);
+        const a = x[hOff + t], b = x[hOff + t + half];
+        out[hOff + t] = a * c - b * s;
+        out[hOff + t + half] = b * c + a * s;
+      }
+    }
+  }
+  return out;
+}

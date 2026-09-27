@@ -338,6 +338,74 @@ const KERNEL_SOURCES = {
       if (y < 0 || y >= iSrcRows) discard;
       fragOut = texelFetch(A, ivec2(p.x, y), 0);
     }`),
+
+  // RMSNorm rows: y = x * rstd * G (no mean subtraction, no bias)
+  rmsnorm: fsKernel(`
+    uniform sampler2D A; uniform sampler2D G; uniform int iC; uniform float uEps;
+    void main() {
+      ivec2 p = ivec2(gl_FragCoord.xy);
+      int y = p.y;
+      int ctex = (iC + 3) / 4;
+      float ss = 0.0;
+      for (int x = 0; x < ctex; x++) {
+        vec4 v = texelFetch(A, ivec2(x, y), 0);
+        ss += (x * 4 + 0 < iC ? v.x * v.x : 0.0) + (x * 4 + 1 < iC ? v.y * v.y : 0.0)
+            + (x * 4 + 2 < iC ? v.z * v.z : 0.0) + (x * 4 + 3 < iC ? v.w * v.w : 0.0);
+      }
+      float rstd = inversesqrt(ss / float(iC) + uEps);
+      vec4 g = texelFetch(G, ivec2(p.x, 0), 0);
+      vec4 v = texelFetch(A, p, 0);
+      vec4 o = v * rstd * g;
+      int base = p.x * 4;
+      fragOut = base + 3 < iC ? o : vec4(
+        base + 0 < iC ? o.x : 0.0, base + 1 < iC ? o.y : 0.0,
+        base + 2 < iC ? o.z : 0.0, base + 3 < iC ? o.w : 0.0);
+    }`),
+
+  // elementwise A * B (same shape)
+  mul: fsKernel(`
+    uniform sampler2D A; uniform sampler2D B; uniform int iC;
+    void main() {
+      ivec2 p = ivec2(gl_FragCoord.xy);
+      int base = p.x * 4;
+      vec4 v = texelFetch(A, p, 0) * texelFetch(B, p, 0);
+      v = base + 3 < iC ? v : vec4(
+        base + 0 < iC ? v.x : 0.0, base + 1 < iC ? v.y : 0.0,
+        base + 2 < iC ? v.z : 0.0, base + 3 < iC ? v.w : 0.0);
+      fragOut = v;
+    }`),
+
+  // RoPE over [rows, headDim*nHeads]. Rotates pairs (t, t+half) per head by
+  // angle = (iPos0 + row) * theta^(-2*(t mod half)/half).
+  rope: fsKernel(`
+    uniform sampler2D A; uniform int iC; uniform int iHeadDim;
+    uniform float uTheta; uniform float uPos0;
+    void main() {
+      ivec2 p = ivec2(gl_FragCoord.xy);
+      int row = p.y;
+      int base = p.x * 4;
+      int half = iHeadDim / 2;
+      float pos = uPos0 + float(row);
+      vec4 o = vec4(0.0);
+      for (int ch = 0; ch < 4; ch++) {
+        int c = base + ch;
+        if (c >= iC) break;
+        int t = c % iHeadDim;
+        int t2 = t < half ? t : t - half;
+        float invFreq = pow(uTheta, -2.0 * float(t2) / float(half));
+        float ang = pos * invFreq;
+        float cs = cos(ang), sn = sin(ang);
+        int pc = t < half ? c + half : c - half;
+        vec4 pv = texelFetch(A, ivec2(pc >> 2, row), 0);
+        float partner = (pc & 3) == 0 ? pv.x : (pc & 3) == 1 ? pv.y : (pc & 3) == 2 ? pv.z : pv.w;
+        vec4 av = texelFetch(A, p, 0);
+        float v = ch == 0 ? av.x : ch == 1 ? av.y : ch == 2 ? av.z : av.w;
+        o[ch] = t < half ? v * cs - partner * sn : v * cs + partner * sn;
+      }
+      fragOut = base + 3 < iC ? o : vec4(
+        base + 0 < iC ? o.x : 0.0, base + 1 < iC ? o.y : 0.0,
+        base + 2 < iC ? o.z : 0.0, base + 3 < iC ? o.w : 0.0);
+    }`),
 };
 
 export class GLBackend {

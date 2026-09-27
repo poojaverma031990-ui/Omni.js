@@ -3,7 +3,11 @@
  *   - GPT2 (decoder LM, KV-cache, causal attention, tied/untied lm head)
  *   - BERT (bidirectional encoder + MLM/classification heads)
  *   - DistilBERT (6-layer encoder + heads)
- * All forward passes are explicit sequences of matmul/softmax/layernorm ops.
+ *   - LLAMA FAMILY (Llama / Mistral / Qwen2 / Gemma): RMSNorm, RoPE,
+ *     SwiGLU/GeGLU, grouped-query attention (GQA), tied embeddings
+ *   - RoBERTa (encoder, dynamic position offsets, classification/MLM heads)
+ * Heads: causal LM, classification, token classification, QA (span), MLM.
+ * All forward passes are explicit sequences of matmul/softmax/attention ops.
  */
 import { Tensor } from './tensor.js';
 
@@ -20,19 +24,40 @@ function W(weights, name) {
   return t;
 }
 
+/**
+ * KV-cache with CHUNKED GROWTH — starts small and doubles as needed, so an
+ * 8k-context Llama model does not preallocate gigabytes for a 20-token chat.
+ */
 class KVCache {
-  constructor(model, capacity) {
-    this.capacity = capacity;
-    this.len = 0;
+  constructor(model, capacity = 512) {
+    this.dim = model.kvDim;
     this.layers = [];
-    for (let i = 0; i < model.nLayer; i++) {
-      this.layers.push({
-        k: Tensor.zeros([capacity, model.dim]),
-        v: Tensor.zeros([capacity, model.dim]),
-      });
-    }
+    this.capacity = 0;
+    this.len = 0;
+    for (let i = 0; i < model.nLayer; i++) this.layers.push({ k: null, v: null });
+    this.ensure(capacity);
   }
-  dispose() { for (const l of this.layers) { l.k.dispose(); l.v.dispose(); } }
+  ensure(minCapacity) {
+    if (minCapacity <= this.capacity) return;
+    let cap = Math.max(this.capacity, 256);
+    while (cap < minCapacity) cap *= 2;
+    for (const l of this.layers) {
+      const k = Tensor.zeros([cap, this.dim]);
+      const v = Tensor.zeros([cap, this.dim]);
+      if (l.k) {
+        k.pasteRows(l.k, 0);
+        v.pasteRows(l.v, 0);
+        k.shape[0] = l.k.shape[0];
+        v.shape[0] = l.v.shape[0];
+        l.k.dispose(); l.v.dispose();
+      } else {
+        k.shape[0] = 0; v.shape[0] = 0;
+      }
+      l.k = k; l.v = v;
+    }
+    this.capacity = cap;
+  }
+  dispose() { for (const l of this.layers) { if (l.k) l.k.dispose(); if (l.v) l.v.dispose(); } }
 }
 
 // ---------------------------------------------------------------------------
@@ -48,6 +73,7 @@ export class GPT2Model {
     this.maxPos = this.wpe.shape[0];
     this.nHead = config.n_head || 4;
     this.headDim = Math.floor(this.dim / this.nHead);
+    this.kvDim = this.dim;
     this.eps = config.layer_norm_epsilon ?? config.layer_norm_eps ?? 1e-5;
 
     const nLayer = config.n_layer;
@@ -65,32 +91,30 @@ export class GPT2Model {
     }
     this.lnfw = W(weights, 'transformer.ln_f.weight');
     this.lnfb = W(weights, 'transformer.ln_f.bias');
-    // lm head: prefer explicit, fall back to tied wte
     const lm = weights.get('lm_head.weight');
-    this.lmHead = lm || this.wte; // [V, d] or transposedStorage [d, V]
+    this.lmHead = lm || this.wte;
     this.eosTokenId = config.eos_token_id ?? config.bos_token_id ?? undefined;
     this.nLayer = nLayer;
   }
 
-  makeCache(capacity) { return new KVCache(this, capacity || this.maxPos); }
+  makeCache(capacity) { return new KVCache(this, capacity || 512); }
 
   /** Returns logits [s, V] (lastOnly -> [1, V]). */
   forward(ids, { cache = null, lastOnly = false } = {}) {
     const s = ids.length;
     const posStart = cache ? cache.len : 0;
+    const total0 = posStart + s;
     let x = this.wte.gather(ids);
     const pe = this.wpe.gather(arange(s, posStart));
     x = x.add(pe);
 
-    const t0 = cache ? cache.len : 0;
-    const total0 = t0 + s;
     const causal = s > 1 || cache === null; // prefill needs a causal mask; single-token decode doesn't
     let mask = null;
     if (causal) {
       const data = new Float32Array(s * total0);
       for (let r = 0; r < s; r++) {
         for (let c = 0; c < total0; c++) {
-          if (t0 + r < c) data[r * total0 + c] = -1e9;
+          if (posStart + r < c) data[r * total0 + c] = -1e9;
         }
       }
       mask = Tensor.fromArray(data, [s, total0]);
@@ -104,17 +128,16 @@ export class GPT2Model {
       const k = qkv.sliceCols(this.dim, this.dim);
       const v = qkv.sliceCols(this.dim * 2, this.dim);
 
-      const t = t0;
-      const total = total0;
       if (cache) {
+        cache.ensure(total0);
         if (s === 1) {
-          cache.layers[li].k.scatterRow(k, t);
-          cache.layers[li].v.scatterRow(v, t);
+          cache.layers[li].k.scatterRow(k, posStart);
+          cache.layers[li].v.scatterRow(v, posStart);
         } else {
-          cache.layers[li].k.pasteRows(k, t);
-          cache.layers[li].v.pasteRows(v, t);
+          cache.layers[li].k.pasteRows(k, posStart);
+          cache.layers[li].v.pasteRows(v, posStart);
         }
-        cache.len = total;
+        cache.len = total0;
       }
       const kAll = cache ? cache.layers[li].k : k; // [total, d]
       const vAll = cache ? cache.layers[li].v : v;
@@ -143,6 +166,147 @@ export class GPT2Model {
     if (mask) mask.dispose();
 
     x = x.layernorm(this.lnfw, this.lnfb, this.eps);
+    let finalX = x;
+    if (lastOnly && s > 1) finalX = x.rowSlice(s - 1);
+    return finalX.matmul(this.lmHead, {
+      transB: !this.lmHead.transposedStorage,
+      outShape: lastOnly ? [1, this.vocab] : null,
+    });
+  }
+
+  disposeCache(cache) { if (cache) cache.dispose(); }
+}
+
+// ---------------------------------------------------------------------------
+// LLAMA FAMILY — Llama, Mistral, Qwen2, Gemma (and fine-tunes thereof)
+// RMSNorm + RoPE + SwiGLU/GeGLU + grouped-query attention (GQA)
+// ---------------------------------------------------------------------------
+export class LlamaModel {
+  constructor(weights, config) {
+    this.kind = 'llama';
+    const H = config.hidden_size;
+    this.dim = H;
+    this.embed = W(weights, 'model.embed_tokens.weight'); // [V, H]
+    this.vocab = this.embed.shape[0];
+    this.maxPos = config.max_position_embeddings || this.embed.shape[0] && 4096 || 4096;
+    this.maxPos = config.max_position_embeddings || 4096;
+    this.nHead = config.num_attention_heads;
+    this.nKV = config.num_key_value_heads || this.nHead;
+    this.headDim = config.head_dim || Math.floor(H / this.nHead);
+    this.kvDim = this.nKV * this.headDim;
+    this.qDim = this.nHead * this.headDim;
+    this.eps = config.rms_norm_eps ?? 1e-5;
+    this.ropeTheta = config.rope_theta ?? 10000.0;
+    this.nLayer = config.num_hidden_layers;
+    this.act = (config.hidden_act || 'silu') === 'gelu' ? 'gelu' : 'silu';
+
+    this.layers = [];
+    for (let i = 0; i < this.nLayer; i++) {
+      const p = `model.layers.${i}`;
+      const L = {
+        ln1: W(weights, `${p}.input_layernorm.weight`),
+        qw: W(weights, `${p}.self_attn.q_proj.weight`),
+        kw: W(weights, `${p}.self_attn.k_proj.weight`),
+        vw: W(weights, `${p}.self_attn.v_proj.weight`),
+        ow: W(weights, `${p}.self_attn.o_proj.weight`),
+        ln2: W(weights, `${p}.post_attention_layernorm.weight`),
+        gw: W(weights, `${p}.mlp.gate_proj.weight`),
+        uw: W(weights, `${p}.mlp.up_proj.weight`),
+        dw: W(weights, `${p}.mlp.down_proj.weight`),
+      };
+      // Qwen2 has q/k/v biases; Llama/Mistral/Gemma do not
+      if (weights.has(`${p}.self_attn.q_proj.bias`)) {
+        L.qb = W(weights, `${p}.self_attn.q_proj.bias`);
+        L.kb = W(weights, `${p}.self_attn.k_proj.bias`);
+        L.vb = W(weights, `${p}.self_attn.v_proj.bias`);
+      }
+      this.layers.push(L);
+    }
+    this.finalNorm = W(weights, 'model.norm.weight');
+    // tied embeddings (SmolLM2, Gemma, some Qwen) or explicit lm_head
+    if (config.tie_word_embeddings || !weights.has('lm_head.weight')) {
+      this.lmHead = this.embed;
+    } else {
+      this.lmHead = W(weights, 'lm_head.weight');
+    }
+  }
+
+  makeCache(capacity) { return new KVCache(this, capacity || 512); }
+
+  forward(ids, { cache = null, lastOnly = false } = {}) {
+    const s = ids.length;
+    const posStart = cache ? cache.len : 0;
+    const total0 = posStart + s;
+    const scale = 1 / Math.sqrt(this.headDim);
+
+    let x = this.embed.gather(ids);
+    const causal = s > 1 || cache === null;
+    let mask = null;
+    if (causal) {
+      const data = new Float32Array(s * total0);
+      for (let r = 0; r < s; r++) {
+        for (let c = 0; c < total0; c++) {
+          if (posStart + r < c) data[r * total0 + c] = -1e9;
+        }
+      }
+      mask = Tensor.fromArray(data, [s, total0]);
+    }
+
+    const headGroups = this.nHead / this.nKV; // q heads per kv head
+
+    for (let li = 0; li < this.layers.length; li++) {
+      const L = this.layers[li];
+      // ---- attention block ----
+      let h = x.rmsnorm(L.ln1, this.eps);
+      let q = h.matmul(L.qw, { transB: true });           // [s, qDim]
+      let k = h.matmul(L.kw, { transB: true });           // [s, kvDim]
+      let v = h.matmul(L.vw, { transB: true });
+      if (L.qb) { q = q.addRowBias(L.qb); k = k.addRowBias(L.kb); v = v.addRowBias(L.vb); }
+      q = q.rope(posStart, this.headDim, this.ropeTheta);
+      k = k.rope(posStart, this.headDim, this.ropeTheta);
+
+      if (cache) {
+        cache.ensure(total0);
+        if (s === 1) {
+          cache.layers[li].k.scatterRow(k, posStart);
+          cache.layers[li].v.scatterRow(v, posStart);
+        } else {
+          cache.layers[li].k.pasteRows(k, posStart);
+          cache.layers[li].v.pasteRows(v, posStart);
+        }
+        cache.len = total0;
+      }
+      const kAll = cache ? cache.layers[li].k : k;
+      const vAll = cache ? cache.layers[li].v : v;
+
+      const attnOut = Tensor.zeros([s, this.qDim]);
+      attnOut.clear();
+      for (let qi = 0; qi < this.nHead; qi++) {
+        const kvHead = Math.floor(qi / headGroups);
+        const off = qi * this.headDim;
+        const qh = q.sliceCols(off, this.headDim);
+        const kh = kAll.sliceCols(kvHead * this.headDim, this.headDim);
+        const vh = vAll.sliceCols(kvHead * this.headDim, this.headDim);
+        let scores = qh.matmul(kh, { transB: true });
+        if (causal && mask) scores = scores.add(mask);
+        const probs = scores.softmax(scale);
+        const ctx = probs.matmul(vh);
+        attnOut.scatterCols(ctx, off, this.headDim);
+      }
+      let o = attnOut.matmul(L.ow, { transB: true });
+      x = x.add(o);
+
+      // ---- SwiGLU / GeGLU block ----
+      h = x.rmsnorm(L.ln2, this.eps);
+      const gate = h.matmul(L.gw, { transB: true });
+      const up = h.matmul(L.uw, { transB: true });
+      const acted = this.act === 'gelu' ? gate.gelu().mul(up) : gate.silu().mul(up);
+      const mlp = acted.matmul(L.dw, { transB: true });
+      x = x.add(mlp);
+    }
+    if (mask) mask.dispose();
+
+    x = x.rmsnorm(this.finalNorm, this.eps);
     let finalX = x;
     if (lastOnly && s > 1) finalX = x.rowSlice(s - 1);
     return finalX.matmul(this.lmHead, {
@@ -301,28 +465,127 @@ export class DistilBertModel {
 }
 
 // ---------------------------------------------------------------------------
+// RoBERTa — BERT internals with dynamic position offsets (padding_idx=1) and
+// no pooler. Weight layout mirrors BERT under the roberta.* prefix.
+// ---------------------------------------------------------------------------
+export class RobertaModel {
+  constructor(weights, config) {
+    this.kind = 'roberta';
+    this.word = W(weights, 'roberta.embeddings.word_embeddings.weight');
+    this.pos = W(weights, 'roberta.embeddings.position_embeddings.weight');
+    this.ttype = weights.has('roberta.embeddings.token_type_embeddings.weight')
+      ? weights.get('roberta.embeddings.token_type_embeddings.weight') : null;
+    this.lnw = W(weights, 'roberta.embeddings.LayerNorm.weight');
+    this.lnb = W(weights, 'roberta.embeddings.LayerNorm.bias');
+    this.paddingIdx = config.pad_token_id ?? 1;
+    this.vocab = this.word.shape[0];
+    this.dim = this.word.shape[1];
+    this.maxPos = this.pos.shape[0];
+    this.nHead = config.num_attention_heads || 4;
+    this.headDim = Math.floor(this.dim / this.nHead);
+    this.eps = config.layer_norm_eps ?? config.layer_norm_epsilon ?? 1e-5;
+
+    const nLayer = config.num_hidden_layers;
+    this.layers = [];
+    for (let i = 0; i < nLayer; i++) {
+      const p = `roberta.encoder.layer.${i}`;
+      this.layers.push({
+        qw: W(weights, `${p}.attention.self.query.weight`), qb: W(weights, `${p}.attention.self.query.bias`),
+        kw: W(weights, `${p}.attention.self.key.weight`), kb: W(weights, `${p}.attention.self.key.bias`),
+        vw: W(weights, `${p}.attention.self.value.weight`), vb: W(weights, `${p}.attention.self.value.bias`),
+        ow: W(weights, `${p}.attention.output.dense.weight`), ob: W(weights, `${p}.attention.output.dense.bias`),
+        olw: W(weights, `${p}.attention.output.LayerNorm.weight`), olb: W(weights, `${p}.attention.output.LayerNorm.bias`),
+        i1w: W(weights, `${p}.intermediate.dense.weight`), i1b: W(weights, `${p}.intermediate.dense.bias`),
+        i2w: W(weights, `${p}.output.dense.weight`), i2b: W(weights, `${p}.output.dense.bias`),
+        o2w: W(weights, `${p}.output.LayerNorm.weight`), o2b: W(weights, `${p}.output.LayerNorm.bias`),
+      });
+    }
+    this.nLayer = nLayer;
+  }
+
+  forward(ids) {
+    const s = ids.length;
+    // roberta position ids: padding_idx + 1 + arange (for unpadded input)
+    let x = this.word.gather(ids).add(this.pos.gather(arange(s, this.paddingIdx + 1)));
+    if (this.ttype) x = x.add(this.ttype.gather(new Array(s).fill(0)));
+    x = x.layernorm(this.lnw, this.lnb, this.eps);
+    for (const L of this.layers) {
+      const q = x.matmul(L.qw).addRowBias(L.qb);
+      const k = x.matmul(L.kw).addRowBias(L.kb);
+      const v = x.matmul(L.vw).addRowBias(L.vb);
+      const attnOut = Tensor.zeros([s, this.dim]);
+      attnOut.clear();
+      for (let hIdx = 0; hIdx < this.nHead; hIdx++) {
+        const off = hIdx * this.headDim;
+        const qh = q.sliceCols(off, this.headDim);
+        const kh = k.sliceCols(off, this.headDim);
+        const vh = v.sliceCols(off, this.headDim);
+        const scores = qh.matmul(kh, { transB: true });
+        const probs = scores.softmax(1 / Math.sqrt(this.headDim));
+        const ctx = probs.matmul(vh);
+        attnOut.scatterCols(ctx, off, this.headDim);
+      }
+      let o = attnOut.matmul(L.ow).addRowBias(L.ob);
+      x = x.add(o).layernorm(L.olw, L.olb, this.eps);
+      let ff = x.matmul(L.i1w, { transB: true }).addRowBias(L.i1b).gelu();
+      ff = ff.matmul(L.i2w, { transB: true }).addRowBias(L.i2b);
+      x = x.add(ff).layernorm(L.o2w, L.o2b, this.eps);
+    }
+    return [x, null];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Task heads
 // ---------------------------------------------------------------------------
 export function classificationHead(model, weights, config, hidden) {
   // returns logits [1, numLabels] from pooled/first hidden [1, d]
   const d = hidden.cols;
-  const isDistil = model.kind === 'distilbert';
-  if (isDistil && weights.has('pre_classifier.weight')) {
-    const pw = W(weights, 'pre_classifier.weight'), pb = W(weights, 'pre_classifier.bias');
-    let h = hidden.matmul(pw, { transB: true }).addRowBias(pb).relu();
-    const cw = W(weights, 'classifier.weight'), cb = W(weights, 'classifier.bias');
-    return h.matmul(cw, { transB: true }).addRowBias(cb);
+  if (model.kind === 'roberta') {
+    if (weights.has('classifier.dense.weight') && weights.has('classifier.out_proj.weight')) {
+      let h = hidden.matmul(W(weights, 'classifier.dense.weight'), { transB: true })
+        .addRowBias(W(weights, 'classifier.dense.bias')).tanh_();
+      return h.matmul(W(weights, 'classifier.out_proj.weight'), { transB: true })
+        .addRowBias(W(weights, 'classifier.out_proj.bias'));
+    }
+    if (weights.has('classifier.weight')) {
+      return hidden.matmul(W(weights, 'classifier.weight'), { transB: true })
+        .addRowBias(W(weights, 'classifier.bias'));
+    }
+    throw new Error('[mini.js] no roberta classification head found');
   }
-  if (!isDistil && weights.has('bert.pooler.dense.weight') && weights.has('classifier.weight')) {
-    const cw = W(weights, 'classifier.weight'), cb = W(weights, 'classifier.bias');
-    return hidden.matmul(cw, { transB: true }).addRowBias(cb);
+  if (model.kind === 'distilbert') {
+    if (weights.has('pre_classifier.weight')) {
+      const pw = W(weights, 'pre_classifier.weight'), pb = W(weights, 'pre_classifier.bias');
+      let h = hidden.matmul(pw, { transB: true }).addRowBias(pb).relu();
+      const cw = W(weights, 'classifier.weight'), cb = W(weights, 'classifier.bias');
+      return h.matmul(cw, { transB: true }).addRowBias(cb);
+    }
   }
-  // fall back: single linear on first token
-  if (weights.has('classifier.weight')) {
-    const cw = W(weights, 'classifier.weight'), cb = W(weights, 'classifier.bias');
-    return hidden.matmul(cw, { transB: true }).addRowBias(cb);
+  if (!model.kind || model.kind !== 'distilbert') {
+    if (weights.has('classifier.weight')) {
+      const cw = W(weights, 'classifier.weight'), cb = W(weights, 'classifier.bias');
+      return hidden.matmul(cw, { transB: true }).addRowBias(cb);
+    }
   }
   throw new Error('[mini.js] no classification head found in weights');
+}
+
+/** Per-token classification (NER): hidden [s,d] -> logits [s, L]. */
+export function tokenClassificationHead(model, weights, hidden) {
+  const cw = W(weights, 'classifier.weight'), cb = W(weights, 'classifier.bias');
+  return hidden.matmul(cw, { transB: true }).addRowBias(cb);
+}
+
+/** QA span head: hidden [s,d] -> logits [s,2] (start/end). */
+export function qaHead(model, weights, hidden) {
+  const prefix = model.kind === 'distilbert' ? '' : '';
+  const cw = weights.get('qa_outputs.weight') || weights.get('qa_outputs.weight');
+  if (!cw) throw new Error('[mini.js] no qa_outputs head found');
+  const cb = weights.get('qa_outputs.bias');
+  let t = hidden.matmul(cw, { transB: true });
+  if (cb) t = t.addRowBias(cb);
+  return t;
 }
 
 export function mlmHead(model, weights, config, hidden) {
@@ -341,7 +604,7 @@ export function mlmHead(model, weights, config, hidden) {
     }
     return h.matmul(model.word, { transB: true });
   }
-  if (model.kind === 'bert') {
+  if (model.kind === 'bert' || model.kind === 'roberta') {
     let h = hidden;
     if (weights.has('cls.predictions.transform.LayerNorm.weight')) {
       h = h.layernorm(W(weights, 'cls.predictions.transform.LayerNorm.weight'), W(weights, 'cls.predictions.transform.LayerNorm.bias'), model.eps);

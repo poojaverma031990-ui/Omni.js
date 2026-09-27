@@ -72,6 +72,9 @@
         <option value="tiny">hf-internal-testing/tiny-random-gpt2 · &lt;1 MB · instant text-generation test</option>
         <option value="sst2">distilbert/…-sst-2-english · ~268 MB · sentiment (91% acc)</option>
         <option value="mlm">distilbert/distilbert-base-uncased · ~268 MB · fill-mask</option>
+        <option value="chat">⭐ HuggingFaceTB/SmolLM2-135M-Instruct · ~269 MB · real LLM chat (Llama arch)</option>
+        <option value="chat2">Qwen/Qwen2.5-0.5B-Instruct · ~988 MB · real LLM chat (Qwen2 arch)</option>
+        <option value="qa">distilbert/…-distilled-squad · ~268 MB · question answering</option>
       </select>
       <button class="btn-p" id="loadBtn">⬇ Load model</button>
     </div>
@@ -146,6 +149,32 @@
     <div class="out" id="mlmOut" hidden><div class="head"><span>Top predictions</span><span class="kv" id="mlmTime"></span></div><div class="body" id="mlmBody"></div></div>
   </div>
 
+  <!-- ── LLM chat panel ── -->
+  <div class="card" id="panel-chat" hidden>
+    <label class="kv">Multi-turn chat — SmolLM2 (a real instruct LLM, Llama architecture: RMSNorm + RoPE + SwiGLU + GQA). Replies stream token-by-token. Press <b>Stop</b> to cut a reply short.</label>
+    <div class="out" id="chatLog" style="margin-top:10px"><div class="body" id="chatBody" style="min-height:60px">You: hi 👋</div></div>
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="chatInput" style="flex:1;min-width:200px" placeholder="Type a message…" value="Say hello and tell me what you are.">
+      <button class="btn-p" id="chatSend">Send</button>
+      <button class="btn-g" id="chatStop">Stop</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="kv">Temperature <input type="number" id="chatTemp" value="0.7" step="0.1" min="0" max="2" style="width:70px"></label>
+      <label class="kv">Max new tokens <input type="number" id="chatMax" value="120" style="width:80px"></label>
+      <button class="btn-g" id="chatReset" style="margin-left:auto">Reset conversation</button>
+    </div>
+  </div>
+
+  <!-- ── QA panel ── -->
+  <div class="card" id="panel-qa" hidden>
+    <label class="kv">Question</label>
+    <input type="text" id="qaQuestion" style="width:100%" value="Which name is also used to describe the Amazon rainforest in English?">
+    <label class="kv" style="display:block;margin-top:8px">Context</label>
+    <textarea id="qaContext" rows="4">The Amazon rainforest, also known in English as Amazonia or the Amazon Jungle, is a moist broadleaf forest that covers most of the Amazon basin of South America. This basin encompasses 7,000,000 square kilometres, of which 5,500,000 are covered by the rainforest. The majority of the forest is contained within Brazil.</textarea>
+    <button class="btn-p" id="qaBtn" style="margin-top:10px">Answer</button>
+    <div class="out" id="qaOut" hidden><div class="head"><span>Extractive answer</span><span class="kv" id="qaTime"></span></div><div class="body" id="qaBody"></div></div>
+  </div>
+
   <div class="foot">
     engine: <code>mini.js v1.0</code> — 100% hand-written HTML/CSS/JS · WebGL2 kernels + CPU fallback ·
     models by their authors on huggingface.co (Apache-2.0 / MIT) · nothing you type leaves this page
@@ -154,7 +183,7 @@
 
 <script>
 /*!
- * mini.js v1.0.0 — Run real AI models in your browser. One line of code.
+ * mini.js v2.0.0 — Run real AI models in your browser. One line of code.
  * A Transformers.js alternative written 100% from scratch: pure HTML/CSS/JS,
  * zero dependencies, no ONNX Runtime, no TensorFlow.js, no WebAssembly blobs.
  *
@@ -175,7 +204,7 @@
  * 100% from scratch. No dependencies.
  */
 
-const MINI_VERSION = '1.0.0';
+const MINI_VERSION = '2.0.0';
 
 function assert(cond, msg) {
   if (!cond) throw new Error('[mini.js] ' + msg);
@@ -497,6 +526,55 @@ function cpuAppendRow(dst, dstStride, src, srcLen, row) {
 /** Copy a single row of a strided buffer into a contiguous row array. */
 function cpuRowOf(strided, stride, row, cols) {
   return strided.subarray(row * stride, row * stride + cols);
+}
+
+/** RMSNorm: y = x * g / sqrt(mean(x^2) + eps). rows x cols, no bias. */
+function cpuRMSNorm(x, rows, cols, g, eps) {
+  const out = new Float32Array(rows * cols);
+  const inv = 1 / cols;
+  for (let r = 0; r < rows; r++) {
+    const off = r * cols;
+    let ss = 0;
+    for (let c = 0; c < cols; c++) ss += x[off + c] * x[off + c];
+    const rstd = 1 / Math.sqrt(ss * inv + eps);
+    for (let c = 0; c < cols; c++) out[off + c] = x[off + c] * rstd * g[c];
+  }
+  return out;
+}
+
+/** Elementwise multiply of two same-length arrays. */
+function cpuMul(a, b) {
+  const out = new Float32Array(a.length);
+  for (let i = 0; i < a.length; i++) out[i] = a[i] * b[i];
+  return out;
+}
+
+/**
+ * Rotary position embedding (RoPE), applied in place to q/k tensors of shape
+ * [rows, headDim * nHeads]. Interleaved-half convention used by Llama/Mistral/
+ * Qwen/Gemma: pairs (t, t+half) inside each head rotate by angle
+ * pos * theta^(-2t/half). Returns a NEW Float32Array.
+ */
+function cpuRope(x, rows, cols, headDim, pos0, theta) {
+  const out = new Float32Array(rows * cols);
+  const half = headDim >> 1;
+  for (let r = 0; r < rows; r++) {
+    const pos = pos0 + r;
+    const off = r * cols;
+    const nHeads = cols / headDim;
+    for (let h = 0; h < nHeads; h++) {
+      const hOff = off + h * headDim;
+      for (let t = 0; t < half; t++) {
+        const invFreq = Math.pow(theta, (-2 * t) / half);
+        const ang = pos * invFreq;
+        const c = Math.cos(ang), s = Math.sin(ang);
+        const a = x[hOff + t], b = x[hOff + t + half];
+        out[hOff + t] = a * c - b * s;
+        out[hOff + t + half] = b * c + a * s;
+      }
+    }
+  }
+  return out;
 }
 
 
@@ -841,6 +919,74 @@ const KERNEL_SOURCES = {
       if (y < 0 || y >= iSrcRows) discard;
       fragOut = texelFetch(A, ivec2(p.x, y), 0);
     }`),
+
+  // RMSNorm rows: y = x * rstd * G (no mean subtraction, no bias)
+  rmsnorm: fsKernel(`
+    uniform sampler2D A; uniform sampler2D G; uniform int iC; uniform float uEps;
+    void main() {
+      ivec2 p = ivec2(gl_FragCoord.xy);
+      int y = p.y;
+      int ctex = (iC + 3) / 4;
+      float ss = 0.0;
+      for (int x = 0; x < ctex; x++) {
+        vec4 v = texelFetch(A, ivec2(x, y), 0);
+        ss += (x * 4 + 0 < iC ? v.x * v.x : 0.0) + (x * 4 + 1 < iC ? v.y * v.y : 0.0)
+            + (x * 4 + 2 < iC ? v.z * v.z : 0.0) + (x * 4 + 3 < iC ? v.w * v.w : 0.0);
+      }
+      float rstd = inversesqrt(ss / float(iC) + uEps);
+      vec4 g = texelFetch(G, ivec2(p.x, 0), 0);
+      vec4 v = texelFetch(A, p, 0);
+      vec4 o = v * rstd * g;
+      int base = p.x * 4;
+      fragOut = base + 3 < iC ? o : vec4(
+        base + 0 < iC ? o.x : 0.0, base + 1 < iC ? o.y : 0.0,
+        base + 2 < iC ? o.z : 0.0, base + 3 < iC ? o.w : 0.0);
+    }`),
+
+  // elementwise A * B (same shape)
+  mul: fsKernel(`
+    uniform sampler2D A; uniform sampler2D B; uniform int iC;
+    void main() {
+      ivec2 p = ivec2(gl_FragCoord.xy);
+      int base = p.x * 4;
+      vec4 v = texelFetch(A, p, 0) * texelFetch(B, p, 0);
+      v = base + 3 < iC ? v : vec4(
+        base + 0 < iC ? v.x : 0.0, base + 1 < iC ? v.y : 0.0,
+        base + 2 < iC ? v.z : 0.0, base + 3 < iC ? v.w : 0.0);
+      fragOut = v;
+    }`),
+
+  // RoPE over [rows, headDim*nHeads]. Rotates pairs (t, t+half) per head by
+  // angle = (iPos0 + row) * theta^(-2*(t mod half)/half).
+  rope: fsKernel(`
+    uniform sampler2D A; uniform int iC; uniform int iHeadDim;
+    uniform float uTheta; uniform float uPos0;
+    void main() {
+      ivec2 p = ivec2(gl_FragCoord.xy);
+      int row = p.y;
+      int base = p.x * 4;
+      int half = iHeadDim / 2;
+      float pos = uPos0 + float(row);
+      vec4 o = vec4(0.0);
+      for (int ch = 0; ch < 4; ch++) {
+        int c = base + ch;
+        if (c >= iC) break;
+        int t = c % iHeadDim;
+        int t2 = t < half ? t : t - half;
+        float invFreq = pow(uTheta, -2.0 * float(t2) / float(half));
+        float ang = pos * invFreq;
+        float cs = cos(ang), sn = sin(ang);
+        int pc = t < half ? c + half : c - half;
+        vec4 pv = texelFetch(A, ivec2(pc >> 2, row), 0);
+        float partner = (pc & 3) == 0 ? pv.x : (pc & 3) == 1 ? pv.y : (pc & 3) == 2 ? pv.z : pv.w;
+        vec4 av = texelFetch(A, p, 0);
+        float v = ch == 0 ? av.x : ch == 1 ? av.y : ch == 2 ? av.z : av.w;
+        o[ch] = t < half ? v * cs - partner * sn : v * cs + partner * sn;
+      }
+      fragOut = base + 3 < iC ? o : vec4(
+        base + 0 < iC ? o.x : 0.0, base + 1 < iC ? o.y : 0.0,
+        base + 2 < iC ? o.z : 0.0, base + 3 < iC ? o.w : 0.0);
+    }`),
 };
 
 class GLBackend {
@@ -1024,7 +1170,7 @@ function resetGL() { _glInstance = null; }
  * texture (row stride rounded up to 4 floats).
  */
 
-const CK = { zeroFill: zeroFill, cpuMatmul: cpuMatmul, cpuAddBiasRows: cpuAddBiasRows, cpuAdd: cpuAdd, cpuMulRow: cpuMulRow, cpuScale: cpuScale, geluScalar: geluScalar, cpuGelu: cpuGelu, cpuRelu: cpuRelu, cpuSilu: cpuSilu, cpuSigmoid: cpuSigmoid, cpuSoftmaxRows: cpuSoftmaxRows, cpuLayerNorm: cpuLayerNorm, cpuEmbedding: cpuEmbedding, cpuSliceCols: cpuSliceCols, cpuScatterCols: cpuScatterCols, cpuAppendRow: cpuAppendRow, cpuRowOf: cpuRowOf };
+const CK = { zeroFill: zeroFill, cpuMatmul: cpuMatmul, cpuAddBiasRows: cpuAddBiasRows, cpuAdd: cpuAdd, cpuMulRow: cpuMulRow, cpuScale: cpuScale, geluScalar: geluScalar, cpuGelu: cpuGelu, cpuRelu: cpuRelu, cpuSilu: cpuSilu, cpuSigmoid: cpuSigmoid, cpuSoftmaxRows: cpuSoftmaxRows, cpuLayerNorm: cpuLayerNorm, cpuEmbedding: cpuEmbedding, cpuSliceCols: cpuSliceCols, cpuScatterCols: cpuScatterCols, cpuAppendRow: cpuAppendRow, cpuRowOf: cpuRowOf, cpuRMSNorm: cpuRMSNorm, cpuMul: cpuMul, cpuRope: cpuRope };
 
 let ACTIVE_BACKEND = null; // 'cpu' | 'webgl'
 
@@ -1331,6 +1477,48 @@ class Tensor {
         { iC: this.cols, uEps: eps });
     } else {
       out.data.set(CK.cpuLayerNorm(this.data, this.rows, this.cols, gamma.data, beta.data, eps));
+    }
+    return out;
+  }
+
+  /** RMSNorm (Llama family): y = x * g / sqrt(mean(x²)+eps). */
+  rmsnorm(gamma, eps = 1e-5) {
+    const out = Tensor.zeros(this.shape.slice());
+    if (this.backend === 'webgl') {
+      getGL().run('rmsnorm', out.tex, out._texW, out._texH,
+        [['A', this.tex], ['G', gamma.tex]],
+        { iC: this.cols, uEps: eps });
+    } else {
+      out.data.set(CK.cpuRMSNorm(this.data, this.rows, this.cols, gamma.data, eps));
+    }
+    return out;
+  }
+
+  /** Elementwise multiply (same shape). */
+  mul(o) {
+    const out = Tensor.zeros(this.shape.slice());
+    if (this.backend === 'webgl') {
+      getGL().run('mul', out.tex, out._texW, out._texH,
+        [['A', this.tex], ['B', o.tex]], { iC: this.cols });
+    } else {
+      out.data.set(CK.cpuMul(this.data, o.data));
+    }
+    return out;
+  }
+
+  /**
+   * Rotary position embedding (Llama family). headDim = dim per head;
+   * this tensor is [rows, headDim * nHeads]; pos0 = position of first row.
+   * theta = rope base (e.g. 10000, 500000).
+   */
+  rope(pos0, headDim, theta = 10000.0) {
+    const out = Tensor.zeros(this.shape.slice());
+    if (this.backend === 'webgl') {
+      getGL().run('rope', out.tex, out._texW, out._texH,
+        [['A', this.tex]],
+        { iC: this.cols, iHeadDim: headDim, uTheta: theta, uPos0: pos0 });
+    } else {
+      out.data.set(CK.cpuRope(this.data, this.rows, this.cols, headDim, pos0, theta));
     }
     return out;
   }
@@ -1834,6 +2022,20 @@ class Tokenizer {
   tokenize(text) {
     return this.encode(text).map(id => this.idToToken.get(id) ?? '<unk>');
   }
+
+  /**
+   * Apply the model's chat template to a conversation.
+   * messages: [{role:'system'|'user'|'assistant', content}, ...]
+   * Uses the repo's real Jinja template (subset renderer) when present,
+   * otherwise a builtin ChatML / Llama-2 / Llama-3 / Gemma template.
+   */
+  applyChatTemplate(messages, { addGenerationPrompt = true, modelType = null } = {}) {
+    return buildChatPrompt(messages, {
+      template: this.chatTemplate,
+      modelType: modelType || this.modelType,
+      addGenerationPrompt,
+    });
+  }
 }
 
 /** Convenience: build from fetched files. */
@@ -1846,13 +2048,394 @@ function createTokenizer(tokenizerJsonText, tokenizerConfigObj, modelType) {
 }
 
 
+// ───────────────────────────── src/chat-template.js ─────────────────────────────
+/**
+ * mini.js — chat templates, from scratch.
+ * Renders the Jinja2 `chat_template` that real models ship inside
+ * tokenizer_config.json (subset: for/if/elif/else, set, comparisons,
+ * is defined / is not defined, not/and/or, string concat with +,
+ * loop.first/last/index0/index1, path & index access, |length, |tojson,
+ * whitespace control with {%- -%} / {{- -}}).
+ * Falls back to builtin family templates (ChatML, Llama-2, Llama-3, Gemma)
+ * when a repo has no template or the template uses unsupported syntax.
+ */
+
+class TemplateError extends Error {}
+
+// ─────────────────────────────── expression parser ───────────────────────────
+class ExprParser {
+  constructor(text) { this.s = text; this.i = 0; }
+  ws() { while (this.i < this.s.length && /\s/.test(this.s[this.i])) this.i++; }
+  peek() { this.ws(); return this.s[this.i]; }
+  eat(tok) {
+    this.ws();
+    if (this.s.startsWith(tok, this.i)) { this.i += tok.length; return true; }
+    return false;
+  }
+  expect(tok) { if (!this.eat(tok)) throw new TemplateError(`expected "${tok}" in "${this.s}"`); }
+
+  parse() {
+    let left = this.parseOr();
+    return left;
+  }
+  parseOr() {
+    let left = this.parseAnd();
+    while (true) {
+      this.ws();
+      if (this.s.startsWith('or', this.i) && /[\s(]/.test(this.s[this.i + 2] || ' ')) {
+        this.i += 2;
+        const right = this.parseAnd();
+        left = { t: 'or', a: left, b: right };
+      } else return left;
+    }
+  }
+  parseAnd() {
+    let left = this.parseNot();
+    while (true) {
+      this.ws();
+      if (this.s.startsWith('and', this.i) && /[\s(]/.test(this.s[this.i + 3] || ' ')) {
+        this.i += 3;
+        const right = this.parseNot();
+        left = { t: 'and', a: left, b: right };
+      } else return left;
+    }
+  }
+  parseNot() {
+    this.ws();
+    if (this.s.startsWith('not ', this.i)) {
+      this.i += 4;
+      return { t: 'not', a: this.parseNot() };
+    }
+    return this.parseCompare();
+  }
+  parseCompare() {
+    let left = this.parseAdd();
+    while (true) {
+      this.ws();
+      let op = null;
+      for (const cand of ['==', '!=', '>=', '<=', '>', '<']) {
+        if (this.s.startsWith(cand, this.i)) { op = cand; break; }
+      }
+      if (!op) return left;
+      this.i += op.length;
+      const right = this.parseAdd();
+      left = { t: 'cmp', op, a: left, b: right };
+    }
+  }
+  parseAdd() {
+    let left = this.parseTest();
+    while (true) {
+      this.ws();
+      if (this.s[this.i] === '+') {
+        this.i++;
+        left = { t: 'concat', a: left, b: this.parseTest() };
+      } else return left;
+    }
+  }
+  parseTest() {
+    let left = this.parsePostfix();
+    this.ws();
+    const m = /^is\s+(not\s+)?(defined|string|number|mapping)/.exec(this.s.slice(this.i));
+    if (m) {
+      this.i += m[0].length;
+      return { t: 'test', neg: !!m[1], kind: m[2], a: left };
+    }
+    return left;
+  }
+  parsePostfix() {
+    let base = this.parsePrimary();
+    while (true) {
+      if (this.s[this.i] === '.') {
+        this.i++;
+        const name = this.ident();
+        base = { t: 'get', a: base, b: { t: 'lit', v: name } };
+      } else if (this.s[this.i] === '[') {
+        this.i++;
+        const idx = this.parse();
+        this.expect(']');
+        base = { t: 'get', a: base, b: idx };
+      } else if (this.s[this.i] === '|') {
+        this.i++;
+        const f = this.ident();
+        base = { t: 'filter', f, a: base };
+      } else return base;
+    }
+  }
+  ident() {
+    this.ws();
+    const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(this.s.slice(this.i));
+    if (!m) throw new TemplateError(`expected identifier at "${this.s.slice(this.i, this.i + 12)}"`);
+    this.i += m[0].length;
+    return m[0];
+  }
+  parsePrimary() {
+    this.ws();
+    const c = this.s[this.i];
+    if (c === "'" || c === '"') {
+      const q = c; this.i++;
+      let out = '';
+      while (this.i < this.s.length && this.s[this.i] !== q) {
+        if (this.s[this.i] === '\\') { this.i++; }
+        out += this.s[this.i++];
+      }
+      this.i++; // closing quote
+      return { t: 'lit', v: out };
+    }
+    if (/[0-9]/.test(c)) {
+      const m = /^[0-9]+(\.[0-9]+)?/.exec(this.s.slice(this.i));
+      this.i += m[0].length;
+      return { t: 'lit', v: Number(m[0]) };
+    }
+    if (this.s.startsWith('true', this.i)) { this.i += 4; return { t: 'lit', v: true }; }
+    if (this.s.startsWith('false', this.i)) { this.i += 5; return { t: 'lit', v: false }; }
+    if (this.s.startsWith('none', this.i)) { this.i += 4; return { t: 'lit', v: null }; }
+    return { t: 'var', name: this.ident() };
+  }
+}
+
+function parseExpr(text) { return new ExprParser(text).parse(); }
+
+// ─────────────────────────────── evaluator ───────────────────────────────────
+function evalExpr(node, ctx) {
+  switch (node.t) {
+    case 'lit': return node.v;
+    case 'var': {
+      if (!(node.name in ctx)) throw new TemplateError('undefined variable: ' + node.name);
+      return ctx[node.name];
+    }
+    case 'get': {
+      const obj = evalExpr(node.a, ctx);
+      const key = evalExpr(node.b, ctx);
+      if (obj === null || obj === undefined) throw new TemplateError('cannot index ' + obj);
+      return obj[key];
+    }
+    case 'concat': {
+      const a = evalExpr(node.a, ctx), b = evalExpr(node.b, ctx);
+      return String(a ?? '') + String(b ?? '');
+    }
+    case 'cmp': {
+      const a = evalExpr(node.a, ctx), b = evalExpr(node.b, ctx);
+      switch (node.op) {
+        case '==': return a === b || (a == null && b == null);
+        case '!=': return !(a === b || (a == null && b == null));
+        case '>': return a > b; case '<': return a < b;
+        case '>=': return a >= b; case '<=': return a <= b;
+      }
+      return false;
+    }
+    case 'and': return !!(evalExpr(node.a, ctx)) && !!(evalExpr(node.b, ctx));
+    case 'or': return !!(evalExpr(node.a, ctx)) || !!(evalExpr(node.b, ctx));
+    case 'not': return !evalExpr(node.a, ctx);
+    case 'test': {
+      let v;
+      try { v = evalExpr(node.a, ctx); } catch (_) { v = undefined; }
+      let res;
+      if (node.kind === 'defined') res = v !== undefined;
+      else if (node.kind === 'string') res = typeof v === 'string';
+      else if (node.kind === 'number') res = typeof v === 'number';
+      else res = v !== null && typeof v === 'object';
+      return node.neg ? !res : res;
+    }
+    case 'filter': {
+      const v = evalExpr(node.a, ctx);
+      if (node.f === 'length') return v == null ? 0 : (v.length ?? Object.keys(v).length);
+      if (node.f === 'tojson') return JSON.stringify(v);
+      if (node.f === 'trim') return String(v).trim();
+      if (node.f === 'lower') return String(v).toLowerCase();
+      if (node.f === 'upper') return String(v).toUpperCase();
+      throw new TemplateError('unsupported filter: ' + node.f);
+    }
+    default: throw new TemplateError('unknown expr node ' + node.t);
+  }
+}
+
+// ─────────────────────────────── template parser ─────────────────────────────
+/**
+ * Parses a jinja-ish template into a node tree:
+ *   {t:'text', v} {t:'out', expr} {t:'for', varName, list, body}
+ *   {t:'if', clauses:[{cond, body}], else: body|null} {t:'set', name, expr}
+ *   {t:'raise', msg}
+ */
+function parseTemplate(raw) {
+  // normalize whitespace control: {%- / -%} / {{- / -}}
+  const src = raw.replace(/\{%-/g, '{%').replace(/-%\}/g, '%}')
+                 .replace(/\{\{-/g, '{{').replace(/-\}\}/g, '}}');
+  const TAG_RE = /\{%([\s\S]+?)%\}|\{\{([\s\S]+?)\}\}/g;
+
+  // find next tag at or after `from`
+  function nextTag(from) {
+    TAG_RE.lastIndex = from;
+    const m = TAG_RE.exec(src);
+    if (!m) return null;
+    return {
+      start: m.index,
+      end: m.index + m[0].length,
+      type: m[2] !== undefined ? 'out' : 'tag',
+      inner: (m[2] !== undefined ? m[2] : m[1]).trim(),
+    };
+  }
+
+  function parseNodes(stopTags) {
+    const body = [];
+    while (true) {
+      const tag = nextTag(i);
+      if (!tag) {
+        if (stopTags) throw new TemplateError('unclosed block, expected ' + stopTags.join('/'));
+        if (i < src.length) body.push({ t: 'text', v: src.slice(i) });
+        i = src.length;
+        return { body, stopTag: null };
+      }
+      if (tag.start > i) body.push({ t: 'text', v: src.slice(i, tag.start) });
+      i = tag.end;
+      if (tag.type === 'out') {
+        body.push({ t: 'out', expr: parseExpr(tag.inner) });
+        continue;
+      }
+      const word = (/^[A-Za-z_][A-Za-z0-9_]*/.exec(tag.inner) || [''])[0];
+      if (stopTags && stopTags.includes(word)) {
+        return { body, stopTag: tag.inner };
+      }
+      if (word === 'for') {
+        const fm = /^for\s+([A-Za-z_]\w*)\s+in\s+([\s\S]+)$/.exec(tag.inner);
+        if (!fm) throw new TemplateError('bad for tag: ' + tag.inner);
+        const sub = parseNodes(['endfor']);
+        body.push({ t: 'for', varName: fm[1], list: parseExpr(fm[2]), body: sub.body });
+      } else if (word === 'if') {
+        const cond = parseExpr(tag.inner.slice(2).trim());
+        const sub = parseNodes(['elif', 'else', 'endif']);
+        const clauses = [{ cond, body: sub.body }];
+        let elseBody = null;
+        let cur = sub;
+        while (cur.stopTag && cur.stopTag.startsWith('elif')) {
+          const cond2 = parseExpr(cur.stopTag.slice(4).trim());
+          const sub2 = parseNodes(['elif', 'else', 'endif']);
+          clauses.push({ cond: cond2, body: sub2.body });
+          cur = sub2;
+        }
+        if (cur.stopTag === 'else') {
+          const sub2 = parseNodes(['endif']);
+          elseBody = sub2.body;
+        }
+        body.push({ t: 'if', clauses, else: elseBody });
+      } else if (word === 'set') {
+        const sm = /^set\s+([A-Za-z_]\w*)\s*=\s*([\s\S]+)$/.exec(tag.inner);
+        if (!sm) throw new TemplateError('bad set tag: ' + tag.inner);
+        body.push({ t: 'set', name: sm[1], expr: parseExpr(sm[2]) });
+      } else if (word === 'raise_exception') {
+        const rm = /^raise_exception\(([\s\S]+)\)$/.exec(tag.inner);
+        body.push({ t: 'raise', msg: rm ? rm[1].replace(/^['"]|['"]$/g, '') : 'template error' });
+      } else {
+        throw new TemplateError('unsupported tag: ' + word);
+      }
+    }
+  }
+
+  let i = 0;
+  const tree = parseNodes(null);
+  return tree.body;
+}
+
+function runNodes(nodes, ctx, out) {
+  for (const n of nodes) {
+    if (n.t === 'text') out.push(n.v);
+    else if (n.t === 'out') out.push(String(evalExpr(n.expr, ctx) ?? ''));
+    else if (n.t === 'set') ctx[n.name] = evalExpr(n.expr, ctx);
+    else if (n.t === 'raise') throw new TemplateError(n.msg);
+    else if (n.t === 'for') {
+      const list = evalExpr(n.list, ctx);
+      if (!Array.isArray(list)) continue;
+      const nItems = list.length;
+      for (let i = 0; i < nItems; i++) {
+        ctx[n.varName] = list[i];
+        ctx.loop = { first: i === 0, last: i === nItems - 1, index0: i, index1: i + 1 };
+        runNodes(n.body, ctx, out);
+      }
+    } else if (n.t === 'if') {
+      let taken = false;
+      for (const cl of n.clauses) {
+        if (evalExpr(cl.cond, ctx)) { runNodes(cl.body, ctx, out); taken = true; break; }
+      }
+      if (!taken && n.else) runNodes(n.else, ctx, out);
+    }
+  }
+}
+
+/** Main entry: build the final prompt string for a chat conversation.
+ * Expressions must be fully consumed — a trailing unparsed fragment (like an
+ * unsupported function call) is a subset miss → TemplateError → builtin fallback.
+ */
+function renderChatTemplate(template, vars) {
+  const tree = parseTemplate(template);
+  const ctx = Object.assign({}, vars);
+  const out = [];
+  runNodes(tree, ctx, out);
+  return out.join('');
+}
+
+// ─────────────────────────────── builtin families ────────────────────────────
+function detectChatFamily(templateStr, modelType) {
+  const t = templateStr || '';
+  if (t.includes('<|start_header_id|>')) return 'llama3';
+  if (t.includes('<|im_start|>')) return 'chatml';
+  if (t.includes('<start_of_turn>')) return 'gemma';
+  if (t.includes('[INST]')) return 'llama2';
+  const mt = (modelType || '').toLowerCase();
+  if (mt === 'qwen2' || mt === 'qwen3') return 'chatml';
+  if (mt === 'llama') return 'llama3';
+  if (mt === 'gemma' || mt === 'gemma2' || mt === 'gemma3') return 'gemma';
+  if (mt === 'mistral') return 'llama2';
+  return 'chatml';
+}
+
+function builtinTemplate(family) {
+  switch (family) {
+    case 'llama3':
+      return "{% for m in messages %}<|start_header_id|>{{ m['role'] }}<|end_header_id|>\n\n{{ m['content'] }}<|eot_id|>{% endfor %}{% if add_generation_prompt %}<|start_header_id|>assistant<|end_header_id|>\n\n{% endif %}";
+    case 'llama2':
+      return "{% for m in messages %}{% if m['role'] == 'user' %}[INST] {{ m['content'] }} [/INST]{% elif m['role'] == 'assistant' %}{{ m['content'] }}</s>{% elif m['role'] == 'system' %}<<SYS>> {{ m['content'] }} <</SYS>>{% endif %}{% endfor %}";
+    case 'gemma':
+      return "{% for m in messages %}<start_of_turn>{{ m['role'] }}\n{{ m['content'] }}<end_of_turn>\n{% endfor %}{% if add_generation_prompt %}<start_of_turn>model\n{% endif %}";
+    case 'chatml':
+    default:
+      return "{% for m in messages %}<|im_start|>{{ m['role'] }}\n{{ m['content'] }}<|im_end|>\n{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}";
+  }
+}
+
+/**
+ * Main entry: build the final prompt string for a chat conversation.
+ * messages: [{role: 'system'|'user'|'assistant', content: string}, ...]
+ */
+function buildChatPrompt(messages, { template = null, modelType = null, addGenerationPrompt = true } = {}) {
+  const family = detectChatFamily(template, modelType);
+  const vars = {
+    messages,
+    add_generation_prompt: addGenerationPrompt,
+    bos_token: '', eos_token: '',
+    development: 'none',
+  };
+  if (template) {
+    try {
+      return renderChatTemplate(template, vars);
+    } catch (e) {
+      // template used syntax outside our subset → family builtin
+      console.warn('[mini.js] chat template subset miss (' + e.message + ') — using builtin ' + family + ' template');
+    }
+  }
+  return renderChatTemplate(builtinTemplate(family), vars);
+}
+
+
 // ───────────────────────────── src/models.js ─────────────────────────────
 /**
  * mini.js — Transformer architectures implemented from scratch with Tensors:
  *   - GPT2 (decoder LM, KV-cache, causal attention, tied/untied lm head)
  *   - BERT (bidirectional encoder + MLM/classification heads)
  *   - DistilBERT (6-layer encoder + heads)
- * All forward passes are explicit sequences of matmul/softmax/layernorm ops.
+ *   - LLAMA FAMILY (Llama / Mistral / Qwen2 / Gemma): RMSNorm, RoPE,
+ *     SwiGLU/GeGLU, grouped-query attention (GQA), tied embeddings
+ *   - RoBERTa (encoder, dynamic position offsets, classification/MLM heads)
+ * Heads: causal LM, classification, token classification, QA (span), MLM.
+ * All forward passes are explicit sequences of matmul/softmax/attention ops.
  */
 
 
@@ -1869,19 +2452,40 @@ function W(weights, name) {
   return t;
 }
 
+/**
+ * KV-cache with CHUNKED GROWTH — starts small and doubles as needed, so an
+ * 8k-context Llama model does not preallocate gigabytes for a 20-token chat.
+ */
 class KVCache {
-  constructor(model, capacity) {
-    this.capacity = capacity;
-    this.len = 0;
+  constructor(model, capacity = 512) {
+    this.dim = model.kvDim;
     this.layers = [];
-    for (let i = 0; i < model.nLayer; i++) {
-      this.layers.push({
-        k: Tensor.zeros([capacity, model.dim]),
-        v: Tensor.zeros([capacity, model.dim]),
-      });
-    }
+    this.capacity = 0;
+    this.len = 0;
+    for (let i = 0; i < model.nLayer; i++) this.layers.push({ k: null, v: null });
+    this.ensure(capacity);
   }
-  dispose() { for (const l of this.layers) { l.k.dispose(); l.v.dispose(); } }
+  ensure(minCapacity) {
+    if (minCapacity <= this.capacity) return;
+    let cap = Math.max(this.capacity, 256);
+    while (cap < minCapacity) cap *= 2;
+    for (const l of this.layers) {
+      const k = Tensor.zeros([cap, this.dim]);
+      const v = Tensor.zeros([cap, this.dim]);
+      if (l.k) {
+        k.pasteRows(l.k, 0);
+        v.pasteRows(l.v, 0);
+        k.shape[0] = l.k.shape[0];
+        v.shape[0] = l.v.shape[0];
+        l.k.dispose(); l.v.dispose();
+      } else {
+        k.shape[0] = 0; v.shape[0] = 0;
+      }
+      l.k = k; l.v = v;
+    }
+    this.capacity = cap;
+  }
+  dispose() { for (const l of this.layers) { if (l.k) l.k.dispose(); if (l.v) l.v.dispose(); } }
 }
 
 // ---------------------------------------------------------------------------
@@ -1897,6 +2501,7 @@ class GPT2Model {
     this.maxPos = this.wpe.shape[0];
     this.nHead = config.n_head || 4;
     this.headDim = Math.floor(this.dim / this.nHead);
+    this.kvDim = this.dim;
     this.eps = config.layer_norm_epsilon ?? config.layer_norm_eps ?? 1e-5;
 
     const nLayer = config.n_layer;
@@ -1914,32 +2519,30 @@ class GPT2Model {
     }
     this.lnfw = W(weights, 'transformer.ln_f.weight');
     this.lnfb = W(weights, 'transformer.ln_f.bias');
-    // lm head: prefer explicit, fall back to tied wte
     const lm = weights.get('lm_head.weight');
-    this.lmHead = lm || this.wte; // [V, d] or transposedStorage [d, V]
+    this.lmHead = lm || this.wte;
     this.eosTokenId = config.eos_token_id ?? config.bos_token_id ?? undefined;
     this.nLayer = nLayer;
   }
 
-  makeCache(capacity) { return new KVCache(this, capacity || this.maxPos); }
+  makeCache(capacity) { return new KVCache(this, capacity || 512); }
 
   /** Returns logits [s, V] (lastOnly -> [1, V]). */
   forward(ids, { cache = null, lastOnly = false } = {}) {
     const s = ids.length;
     const posStart = cache ? cache.len : 0;
+    const total0 = posStart + s;
     let x = this.wte.gather(ids);
     const pe = this.wpe.gather(arange(s, posStart));
     x = x.add(pe);
 
-    const t0 = cache ? cache.len : 0;
-    const total0 = t0 + s;
     const causal = s > 1 || cache === null; // prefill needs a causal mask; single-token decode doesn't
     let mask = null;
     if (causal) {
       const data = new Float32Array(s * total0);
       for (let r = 0; r < s; r++) {
         for (let c = 0; c < total0; c++) {
-          if (t0 + r < c) data[r * total0 + c] = -1e9;
+          if (posStart + r < c) data[r * total0 + c] = -1e9;
         }
       }
       mask = Tensor.fromArray(data, [s, total0]);
@@ -1953,17 +2556,16 @@ class GPT2Model {
       const k = qkv.sliceCols(this.dim, this.dim);
       const v = qkv.sliceCols(this.dim * 2, this.dim);
 
-      const t = t0;
-      const total = total0;
       if (cache) {
+        cache.ensure(total0);
         if (s === 1) {
-          cache.layers[li].k.scatterRow(k, t);
-          cache.layers[li].v.scatterRow(v, t);
+          cache.layers[li].k.scatterRow(k, posStart);
+          cache.layers[li].v.scatterRow(v, posStart);
         } else {
-          cache.layers[li].k.pasteRows(k, t);
-          cache.layers[li].v.pasteRows(v, t);
+          cache.layers[li].k.pasteRows(k, posStart);
+          cache.layers[li].v.pasteRows(v, posStart);
         }
-        cache.len = total;
+        cache.len = total0;
       }
       const kAll = cache ? cache.layers[li].k : k; // [total, d]
       const vAll = cache ? cache.layers[li].v : v;
@@ -1992,6 +2594,147 @@ class GPT2Model {
     if (mask) mask.dispose();
 
     x = x.layernorm(this.lnfw, this.lnfb, this.eps);
+    let finalX = x;
+    if (lastOnly && s > 1) finalX = x.rowSlice(s - 1);
+    return finalX.matmul(this.lmHead, {
+      transB: !this.lmHead.transposedStorage,
+      outShape: lastOnly ? [1, this.vocab] : null,
+    });
+  }
+
+  disposeCache(cache) { if (cache) cache.dispose(); }
+}
+
+// ---------------------------------------------------------------------------
+// LLAMA FAMILY — Llama, Mistral, Qwen2, Gemma (and fine-tunes thereof)
+// RMSNorm + RoPE + SwiGLU/GeGLU + grouped-query attention (GQA)
+// ---------------------------------------------------------------------------
+class LlamaModel {
+  constructor(weights, config) {
+    this.kind = 'llama';
+    const H = config.hidden_size;
+    this.dim = H;
+    this.embed = W(weights, 'model.embed_tokens.weight'); // [V, H]
+    this.vocab = this.embed.shape[0];
+    this.maxPos = config.max_position_embeddings || this.embed.shape[0] && 4096 || 4096;
+    this.maxPos = config.max_position_embeddings || 4096;
+    this.nHead = config.num_attention_heads;
+    this.nKV = config.num_key_value_heads || this.nHead;
+    this.headDim = config.head_dim || Math.floor(H / this.nHead);
+    this.kvDim = this.nKV * this.headDim;
+    this.qDim = this.nHead * this.headDim;
+    this.eps = config.rms_norm_eps ?? 1e-5;
+    this.ropeTheta = config.rope_theta ?? 10000.0;
+    this.nLayer = config.num_hidden_layers;
+    this.act = (config.hidden_act || 'silu') === 'gelu' ? 'gelu' : 'silu';
+
+    this.layers = [];
+    for (let i = 0; i < this.nLayer; i++) {
+      const p = `model.layers.${i}`;
+      const L = {
+        ln1: W(weights, `${p}.input_layernorm.weight`),
+        qw: W(weights, `${p}.self_attn.q_proj.weight`),
+        kw: W(weights, `${p}.self_attn.k_proj.weight`),
+        vw: W(weights, `${p}.self_attn.v_proj.weight`),
+        ow: W(weights, `${p}.self_attn.o_proj.weight`),
+        ln2: W(weights, `${p}.post_attention_layernorm.weight`),
+        gw: W(weights, `${p}.mlp.gate_proj.weight`),
+        uw: W(weights, `${p}.mlp.up_proj.weight`),
+        dw: W(weights, `${p}.mlp.down_proj.weight`),
+      };
+      // Qwen2 has q/k/v biases; Llama/Mistral/Gemma do not
+      if (weights.has(`${p}.self_attn.q_proj.bias`)) {
+        L.qb = W(weights, `${p}.self_attn.q_proj.bias`);
+        L.kb = W(weights, `${p}.self_attn.k_proj.bias`);
+        L.vb = W(weights, `${p}.self_attn.v_proj.bias`);
+      }
+      this.layers.push(L);
+    }
+    this.finalNorm = W(weights, 'model.norm.weight');
+    // tied embeddings (SmolLM2, Gemma, some Qwen) or explicit lm_head
+    if (config.tie_word_embeddings || !weights.has('lm_head.weight')) {
+      this.lmHead = this.embed;
+    } else {
+      this.lmHead = W(weights, 'lm_head.weight');
+    }
+  }
+
+  makeCache(capacity) { return new KVCache(this, capacity || 512); }
+
+  forward(ids, { cache = null, lastOnly = false } = {}) {
+    const s = ids.length;
+    const posStart = cache ? cache.len : 0;
+    const total0 = posStart + s;
+    const scale = 1 / Math.sqrt(this.headDim);
+
+    let x = this.embed.gather(ids);
+    const causal = s > 1 || cache === null;
+    let mask = null;
+    if (causal) {
+      const data = new Float32Array(s * total0);
+      for (let r = 0; r < s; r++) {
+        for (let c = 0; c < total0; c++) {
+          if (posStart + r < c) data[r * total0 + c] = -1e9;
+        }
+      }
+      mask = Tensor.fromArray(data, [s, total0]);
+    }
+
+    const headGroups = this.nHead / this.nKV; // q heads per kv head
+
+    for (let li = 0; li < this.layers.length; li++) {
+      const L = this.layers[li];
+      // ---- attention block ----
+      let h = x.rmsnorm(L.ln1, this.eps);
+      let q = h.matmul(L.qw, { transB: true });           // [s, qDim]
+      let k = h.matmul(L.kw, { transB: true });           // [s, kvDim]
+      let v = h.matmul(L.vw, { transB: true });
+      if (L.qb) { q = q.addRowBias(L.qb); k = k.addRowBias(L.kb); v = v.addRowBias(L.vb); }
+      q = q.rope(posStart, this.headDim, this.ropeTheta);
+      k = k.rope(posStart, this.headDim, this.ropeTheta);
+
+      if (cache) {
+        cache.ensure(total0);
+        if (s === 1) {
+          cache.layers[li].k.scatterRow(k, posStart);
+          cache.layers[li].v.scatterRow(v, posStart);
+        } else {
+          cache.layers[li].k.pasteRows(k, posStart);
+          cache.layers[li].v.pasteRows(v, posStart);
+        }
+        cache.len = total0;
+      }
+      const kAll = cache ? cache.layers[li].k : k;
+      const vAll = cache ? cache.layers[li].v : v;
+
+      const attnOut = Tensor.zeros([s, this.qDim]);
+      attnOut.clear();
+      for (let qi = 0; qi < this.nHead; qi++) {
+        const kvHead = Math.floor(qi / headGroups);
+        const off = qi * this.headDim;
+        const qh = q.sliceCols(off, this.headDim);
+        const kh = kAll.sliceCols(kvHead * this.headDim, this.headDim);
+        const vh = vAll.sliceCols(kvHead * this.headDim, this.headDim);
+        let scores = qh.matmul(kh, { transB: true });
+        if (causal && mask) scores = scores.add(mask);
+        const probs = scores.softmax(scale);
+        const ctx = probs.matmul(vh);
+        attnOut.scatterCols(ctx, off, this.headDim);
+      }
+      let o = attnOut.matmul(L.ow, { transB: true });
+      x = x.add(o);
+
+      // ---- SwiGLU / GeGLU block ----
+      h = x.rmsnorm(L.ln2, this.eps);
+      const gate = h.matmul(L.gw, { transB: true });
+      const up = h.matmul(L.uw, { transB: true });
+      const acted = this.act === 'gelu' ? gate.gelu().mul(up) : gate.silu().mul(up);
+      const mlp = acted.matmul(L.dw, { transB: true });
+      x = x.add(mlp);
+    }
+    if (mask) mask.dispose();
+
+    x = x.rmsnorm(this.finalNorm, this.eps);
     let finalX = x;
     if (lastOnly && s > 1) finalX = x.rowSlice(s - 1);
     return finalX.matmul(this.lmHead, {
@@ -2150,28 +2893,127 @@ class DistilBertModel {
 }
 
 // ---------------------------------------------------------------------------
+// RoBERTa — BERT internals with dynamic position offsets (padding_idx=1) and
+// no pooler. Weight layout mirrors BERT under the roberta.* prefix.
+// ---------------------------------------------------------------------------
+class RobertaModel {
+  constructor(weights, config) {
+    this.kind = 'roberta';
+    this.word = W(weights, 'roberta.embeddings.word_embeddings.weight');
+    this.pos = W(weights, 'roberta.embeddings.position_embeddings.weight');
+    this.ttype = weights.has('roberta.embeddings.token_type_embeddings.weight')
+      ? weights.get('roberta.embeddings.token_type_embeddings.weight') : null;
+    this.lnw = W(weights, 'roberta.embeddings.LayerNorm.weight');
+    this.lnb = W(weights, 'roberta.embeddings.LayerNorm.bias');
+    this.paddingIdx = config.pad_token_id ?? 1;
+    this.vocab = this.word.shape[0];
+    this.dim = this.word.shape[1];
+    this.maxPos = this.pos.shape[0];
+    this.nHead = config.num_attention_heads || 4;
+    this.headDim = Math.floor(this.dim / this.nHead);
+    this.eps = config.layer_norm_eps ?? config.layer_norm_epsilon ?? 1e-5;
+
+    const nLayer = config.num_hidden_layers;
+    this.layers = [];
+    for (let i = 0; i < nLayer; i++) {
+      const p = `roberta.encoder.layer.${i}`;
+      this.layers.push({
+        qw: W(weights, `${p}.attention.self.query.weight`), qb: W(weights, `${p}.attention.self.query.bias`),
+        kw: W(weights, `${p}.attention.self.key.weight`), kb: W(weights, `${p}.attention.self.key.bias`),
+        vw: W(weights, `${p}.attention.self.value.weight`), vb: W(weights, `${p}.attention.self.value.bias`),
+        ow: W(weights, `${p}.attention.output.dense.weight`), ob: W(weights, `${p}.attention.output.dense.bias`),
+        olw: W(weights, `${p}.attention.output.LayerNorm.weight`), olb: W(weights, `${p}.attention.output.LayerNorm.bias`),
+        i1w: W(weights, `${p}.intermediate.dense.weight`), i1b: W(weights, `${p}.intermediate.dense.bias`),
+        i2w: W(weights, `${p}.output.dense.weight`), i2b: W(weights, `${p}.output.dense.bias`),
+        o2w: W(weights, `${p}.output.LayerNorm.weight`), o2b: W(weights, `${p}.output.LayerNorm.bias`),
+      });
+    }
+    this.nLayer = nLayer;
+  }
+
+  forward(ids) {
+    const s = ids.length;
+    // roberta position ids: padding_idx + 1 + arange (for unpadded input)
+    let x = this.word.gather(ids).add(this.pos.gather(arange(s, this.paddingIdx + 1)));
+    if (this.ttype) x = x.add(this.ttype.gather(new Array(s).fill(0)));
+    x = x.layernorm(this.lnw, this.lnb, this.eps);
+    for (const L of this.layers) {
+      const q = x.matmul(L.qw).addRowBias(L.qb);
+      const k = x.matmul(L.kw).addRowBias(L.kb);
+      const v = x.matmul(L.vw).addRowBias(L.vb);
+      const attnOut = Tensor.zeros([s, this.dim]);
+      attnOut.clear();
+      for (let hIdx = 0; hIdx < this.nHead; hIdx++) {
+        const off = hIdx * this.headDim;
+        const qh = q.sliceCols(off, this.headDim);
+        const kh = k.sliceCols(off, this.headDim);
+        const vh = v.sliceCols(off, this.headDim);
+        const scores = qh.matmul(kh, { transB: true });
+        const probs = scores.softmax(1 / Math.sqrt(this.headDim));
+        const ctx = probs.matmul(vh);
+        attnOut.scatterCols(ctx, off, this.headDim);
+      }
+      let o = attnOut.matmul(L.ow).addRowBias(L.ob);
+      x = x.add(o).layernorm(L.olw, L.olb, this.eps);
+      let ff = x.matmul(L.i1w, { transB: true }).addRowBias(L.i1b).gelu();
+      ff = ff.matmul(L.i2w, { transB: true }).addRowBias(L.i2b);
+      x = x.add(ff).layernorm(L.o2w, L.o2b, this.eps);
+    }
+    return [x, null];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Task heads
 // ---------------------------------------------------------------------------
 function classificationHead(model, weights, config, hidden) {
   // returns logits [1, numLabels] from pooled/first hidden [1, d]
   const d = hidden.cols;
-  const isDistil = model.kind === 'distilbert';
-  if (isDistil && weights.has('pre_classifier.weight')) {
-    const pw = W(weights, 'pre_classifier.weight'), pb = W(weights, 'pre_classifier.bias');
-    let h = hidden.matmul(pw, { transB: true }).addRowBias(pb).relu();
-    const cw = W(weights, 'classifier.weight'), cb = W(weights, 'classifier.bias');
-    return h.matmul(cw, { transB: true }).addRowBias(cb);
+  if (model.kind === 'roberta') {
+    if (weights.has('classifier.dense.weight') && weights.has('classifier.out_proj.weight')) {
+      let h = hidden.matmul(W(weights, 'classifier.dense.weight'), { transB: true })
+        .addRowBias(W(weights, 'classifier.dense.bias')).tanh_();
+      return h.matmul(W(weights, 'classifier.out_proj.weight'), { transB: true })
+        .addRowBias(W(weights, 'classifier.out_proj.bias'));
+    }
+    if (weights.has('classifier.weight')) {
+      return hidden.matmul(W(weights, 'classifier.weight'), { transB: true })
+        .addRowBias(W(weights, 'classifier.bias'));
+    }
+    throw new Error('[mini.js] no roberta classification head found');
   }
-  if (!isDistil && weights.has('bert.pooler.dense.weight') && weights.has('classifier.weight')) {
-    const cw = W(weights, 'classifier.weight'), cb = W(weights, 'classifier.bias');
-    return hidden.matmul(cw, { transB: true }).addRowBias(cb);
+  if (model.kind === 'distilbert') {
+    if (weights.has('pre_classifier.weight')) {
+      const pw = W(weights, 'pre_classifier.weight'), pb = W(weights, 'pre_classifier.bias');
+      let h = hidden.matmul(pw, { transB: true }).addRowBias(pb).relu();
+      const cw = W(weights, 'classifier.weight'), cb = W(weights, 'classifier.bias');
+      return h.matmul(cw, { transB: true }).addRowBias(cb);
+    }
   }
-  // fall back: single linear on first token
-  if (weights.has('classifier.weight')) {
-    const cw = W(weights, 'classifier.weight'), cb = W(weights, 'classifier.bias');
-    return hidden.matmul(cw, { transB: true }).addRowBias(cb);
+  if (!model.kind || model.kind !== 'distilbert') {
+    if (weights.has('classifier.weight')) {
+      const cw = W(weights, 'classifier.weight'), cb = W(weights, 'classifier.bias');
+      return hidden.matmul(cw, { transB: true }).addRowBias(cb);
+    }
   }
   throw new Error('[mini.js] no classification head found in weights');
+}
+
+/** Per-token classification (NER): hidden [s,d] -> logits [s, L]. */
+function tokenClassificationHead(model, weights, hidden) {
+  const cw = W(weights, 'classifier.weight'), cb = W(weights, 'classifier.bias');
+  return hidden.matmul(cw, { transB: true }).addRowBias(cb);
+}
+
+/** QA span head: hidden [s,d] -> logits [s,2] (start/end). */
+function qaHead(model, weights, hidden) {
+  const prefix = model.kind === 'distilbert' ? '' : '';
+  const cw = weights.get('qa_outputs.weight') || weights.get('qa_outputs.weight');
+  if (!cw) throw new Error('[mini.js] no qa_outputs head found');
+  const cb = weights.get('qa_outputs.bias');
+  let t = hidden.matmul(cw, { transB: true });
+  if (cb) t = t.addRowBias(cb);
+  return t;
 }
 
 function mlmHead(model, weights, config, hidden) {
@@ -2190,7 +3032,7 @@ function mlmHead(model, weights, config, hidden) {
     }
     return h.matmul(model.word, { transB: true });
   }
-  if (model.kind === 'bert') {
+  if (model.kind === 'bert' || model.kind === 'roberta') {
     let h = hidden;
     if (weights.has('cls.predictions.transform.LayerNorm.weight')) {
       h = h.layernorm(W(weights, 'cls.predictions.transform.LayerNorm.weight'), W(weights, 'cls.predictions.transform.LayerNorm.bias'), model.eps);
@@ -2207,11 +3049,13 @@ function mlmHead(model, weights, config, hidden) {
 // ───────────────────────────── src/generation.js ─────────────────────────────
 /**
  * mini.js — Text generation engine: greedy / temperature / top-k / top-p sampling,
- * repetition penalty, EOS stopping, KV-cache stepping. From scratch.
+ * repetition penalty, EOS stopping, stop-callbacks, KV-cache stepping.
+ * `generateTokens` is fully synchronous (Node-friendly); `generateAsync`
+ * yields to the event loop between tokens (keeps browser UIs responsive).
  */
 
 
-function softmaxTopNothing(logits) { // full softmax over Float32Array (small: vocab)
+function softmaxTopNothing(logits) {
   let mx = -Infinity;
   for (let i = 0; i < logits.length; i++) if (logits[i] > mx) mx = logits[i];
   let sum = 0;
@@ -2232,14 +3076,9 @@ function applyRepetitionPenalty(logits, generatedIds, penalty) {
 function sampleTopKTopP(probs, { topK = 0, topP = 0 } = {}) {
   const V = probs.length;
   const idx = Array.from({ length: V }, (_, i) => i);
+  idx.sort((a, b) => probs[b] - probs[a]);
   let cand = idx;
-  if (topK && topK > 0 && topK < V) {
-    idx.sort((a, b) => probs[b] - probs[a]);
-    cand = idx.slice(0, topK);
-  } else {
-    idx.sort((a, b) => probs[b] - probs[a]);
-    cand = idx;
-  }
+  if (topK && topK > 0 && topK < V) cand = idx.slice(0, topK);
   if (topP && topP < 1) {
     let acc = 0, cut = cand.length;
     for (let i = 0; i < cand.length; i++) {
@@ -2264,56 +3103,86 @@ function argmax(logits) {
   return best;
 }
 
-/**
- * Generate tokens with a GPT2-style model.
- * options: maxNewTokens, doSample, temperature, topK, topP, repetitionPenalty,
- *          eosTokenId, onToken(id, n)
- * Returns array of generated token ids (excluding prompt).
- */
-function generateTokens(model, inputIds, options = {}, tokenizer = null) {
-  const {
-    maxNewTokens = 50,
-    doSample = true,
-    temperature = 1.0,
-    topK = 50,
-    topP = 0.95,
-    repetitionPenalty = 1.0,
-    eosTokenId = null,
-    onToken = null,
-  } = options;
+function normalizeOptions(options) {
+  return {
+    maxNewTokens: options.maxNewTokens ?? options.max_new_tokens ?? 50,
+    doSample: options.doSample ?? options.do_sample ?? true,
+    temperature: options.temperature ?? 1.0,
+    topK: options.topK ?? options.top_k ?? 50,
+    topP: options.topP ?? options.top_p ?? 0.95,
+    repetitionPenalty: options.repetitionPenalty ?? options.repetition_penalty ?? 1.0,
+    eosTokenId: options.eosTokenId ?? options.eos_token_id ?? null,
+    onToken: options.onToken || null,
+  };
+}
 
+/** Pick the next token from last-token logits. Returns [tokenId, keep]. */
+function pickToken(lastLogits, generated, inputIds, opts) {
+  const work = Float32Array.from(lastLogits);
+  if (opts.repetitionPenalty && opts.repetitionPenalty !== 1.0 && generated.length) {
+    applyRepetitionPenalty(work, inputIds.concat(generated), opts.repetitionPenalty);
+  }
+  if (!opts.doSample || opts.temperature <= 0.0001) return [argmax(work), true];
+  if (opts.temperature !== 1.0) {
+    for (let i = 0; i < work.length; i++) work[i] /= opts.temperature;
+  }
+  return [sampleTopKTopP(softmaxTopNothing(work), { topK: opts.topK, topP: opts.topP }), true];
+}
+
+function lastTokenLogits(model, inputIds, cache) {
+  const logits = arenaRun(() => model.forward(inputIds, { cache, lastOnly: true }));
+  let last = logits.read();
+  if (logits.rows !== 1) last = last.subarray((logits.rows - 1) * logits.cols);
+  else if (last.length !== logits.size) last = last.subarray(0, logits.cols);
+  logits.dispose();
+  return last;
+}
+
+/**
+ * Synchronous generation. options: maxNewTokens, doSample, temperature, topK,
+ * topP, repetitionPenalty, eosTokenId, onToken(id, n) — returning `false` from
+ * onToken stops generation. Returns array of generated token ids.
+ */
+function generateTokens(model, inputIds, options = {}) {
+  const opts = normalizeOptions(options);
   const cache = model.makeCache();
   try {
     const generated = [];
-    let lastLogits;
-    // prefill: single pass over the whole prompt
-    {
-      const logits = arenaRun(() => model.forward(inputIds, { cache, lastOnly: true }));
-      lastLogits = logits.read();
-      if (logits.rows !== 1) lastLogits = lastLogits.subarray((logits.rows - 1) * logits.cols);
-      logits.dispose();
-    }
-    // avoid immediately emitting the BOS of some tokenizers
-    for (let step = 0; step < maxNewTokens; step++) {
-      const work = Float32Array.from(lastLogits);
-      if (repetitionPenalty && repetitionPenalty !== 1.0 && generated.length) {
-        applyRepetitionPenalty(work, inputIds.concat(generated), repetitionPenalty);
-      }
-      let nextId;
-      if (!doSample || (temperature !== undefined && temperature <= 0.0001)) {
-        nextId = argmax(work);
-      } else {
-        if (temperature !== 1.0) for (let i = 0; i < work.length; i++) work[i] /= temperature;
-        const probs = softmaxTopNothing(work);
-        nextId = sampleTopKTopP(probs, { topK, topP });
-      }
+    let lastLogits = lastTokenLogits(model, inputIds, cache);
+    for (let step = 0; step < opts.maxNewTokens; step++) {
+      const [nextId] = pickToken(lastLogits, generated, inputIds, opts);
       generated.push(nextId);
-      if (onToken) onToken(nextId, step + 1);
-      if (eosTokenId !== null && nextId === eosTokenId) break;
-      // decode step: single token, uses cache
-      const l2 = model.forward([nextId], { cache, lastOnly: true });
-      lastLogits = l2.read();
-      if (l2.disposed) break;
+      if (opts.onToken && opts.onToken(nextId, step + 1) === false) break;
+      if (opts.eosTokenId !== null && nextId === opts.eosTokenId) break;
+      lastLogits = lastTokenLogits(model, [nextId], cache);
+    }
+    return generated;
+  } finally {
+    model.disposeCache(cache);
+  }
+}
+
+/**
+ * Async generation — identical API, but yields to the event loop between
+ * tokens (via `tick`, default setTimeout 0) so browser UIs stay responsive
+ * and onToken can update the DOM mid-generation.
+ */
+async function generateAsync(model, inputIds, options = {}) {
+  const opts = normalizeOptions(options);
+  const tick = options.tick || (typeof window !== 'undefined'
+    ? () => new Promise(r => setTimeout(r, 0))
+    : null);
+  const cache = model.makeCache();
+  try {
+    const generated = [];
+    let lastLogits = lastTokenLogits(model, inputIds, cache);
+    for (let step = 0; step < opts.maxNewTokens; step++) {
+      const [nextId] = pickToken(lastLogits, generated, inputIds, opts);
+      generated.push(nextId);
+      if (opts.onToken && opts.onToken(nextId, step + 1) === false) break;
+      if (opts.eosTokenId !== null && nextId === opts.eosTokenId) break;
+      if (tick) await tick();
+      lastLogits = lastTokenLogits(model, [nextId], cache);
     }
     return generated;
   } finally {
@@ -2326,7 +3195,9 @@ function generateTokens(model, inputIds, options = {}, tokenizer = null) {
 /**
  * mini.js — Model Hub: streams files from the Hugging Face Hub with progress,
  * caches them in the browser Cache API (repeat runs are instant), no deps.
+ * Supports sharded safetensors models (model.safetensors.index.json).
  */
+
 
 
 const HF_BASE = 'https://huggingface.co';
@@ -2419,11 +3290,12 @@ async function fetchJSON(repo, filename) {
 
 /**
  * Download everything a repo needs: config, tokenizer files, weights.
- * Returns {config, tokenizerConfig, tokenizerJson, weightsBytes, weightFile}
+ * Supports single `model.safetensors` AND sharded models via
+ * `model.safetensors.index.json` (weight_map → multiple shard files).
+ * Returns {config, tokenizerConfig, tokenizerJson, tensors: Map, weightFiles}
  */
 async function downloadModel(repo, { progressCallback = null, weightFile = null } = {}) {
   const files = {};
-  const tasks = [];
   const grabJSON = async (name) => {
     try { files[name] = await fetchJSON(repo, name); } catch (_) { files[name] = null; }
   };
@@ -2433,22 +3305,41 @@ async function downloadModel(repo, { progressCallback = null, weightFile = null 
     grabJSON('special_tokens_map.json'),
   ]);
 
-  // weights: prefer safetensors. Try explicit file, then common names.
-  const candidates = weightFile ? [weightFile] : ['model.safetensors', 'py_model.safetensors'];
-  let weightsBytes = null;
-  let usedFile = null;
-  let lastErr = null;
-  for (const f of candidates) {
-    try {
-      weightsBytes = await downloadFile(repo, f, { progressCallback });
-      usedFile = f;
-      break;
-    } catch (e) {
-      lastErr = e;
+  const dlOpts = { progressCallback };
+
+  // ── sharded safetensors? ──
+  let index = null;
+  try { index = await fetchJSON(repo, 'model.safetensors.index.json'); } catch (_) { /* single-file */ }
+
+  let tensors = null;
+  const weightFiles = [];
+  if (index && index.weight_map) {
+    const shardNames = [...new Set(Object.values(index.weight_map))];
+    for (const shard of shardNames) {
+      const bytes = await downloadFile(repo, shard, dlOpts);
+      const parsed = parseSafetensors(bytes);
+      if (!tensors) tensors = parsed.tensors;
+      else for (const [k, v] of parsed.tensors) tensors.set(k, v);
+      weightFiles.push(shard);
     }
-  }
-  if (!weightsBytes) {
-    throw lastErr || new Error('[mini.js] no safetensors weights found in ' + repo);
+    // sanity: every mapped tensor must exist
+    for (const name of Object.keys(index.weight_map)) {
+      if (!tensors.has(name)) throw new Error(`[mini.js] shard index references missing tensor "${name}"`);
+    }
+  } else {
+    const candidates = weightFile ? [weightFile] : ['model.safetensors'];
+    let lastErr = null;
+    for (const f of candidates) {
+      try {
+        const bytes = await downloadFile(repo, f, dlOpts);
+        tensors = parseSafetensors(bytes).tensors;
+        weightFiles.push(f);
+        break;
+      } catch (e) { lastErr = e; }
+    }
+    if (!tensors) {
+      throw lastErr || new Error('[mini.js] no safetensors weights found in ' + repo);
+    }
   }
 
   // tokenizer.json (may be missing on very old repos)
@@ -2459,8 +3350,8 @@ async function downloadModel(repo, { progressCallback = null, weightFile = null 
     config: files['config.json'],
     tokenizerConfig: files['tokenizer_config.json'] || files['special_tokens_map.json'] || {},
     tokenizerJson: files['tokenizer.json'],
-    weightsBytes,
-    weightFile: usedFile,
+    tensors,
+    weightFiles,
   };
 }
 
@@ -2474,8 +3365,11 @@ async function clearCache() {
 // ───────────────────────────── src/pipelines.js ─────────────────────────────
 /**
  * mini.js — High-level pipelines, Transformers.js-style but 100% from scratch:
- *   const gen = await mini.pipeline('text-generation', 'openai-community/gpt2');
- *   const out = await gen('Once upon a time');
+ *   const gen = await mini.pipeline('text-generation', 'HuggingFaceTB/SmolLM2-135M-Instruct');
+ *   const chat = await gen.chat([{ role: 'user', content: 'Hello!' }]);
+ *
+ * Tasks: text-generation (+chat), feature-extraction, text-classification,
+ * fill-mask, question-answering, token-classification.
  */
 
 
@@ -2484,13 +3378,12 @@ async function clearCache() {
 
 
 
-
 /** Upload a parsed safetensors map to Tensors (GPU-aware, transposes huge rows). */
-function loadWeights(parsed, backend) {
+function loadWeights(tensors, backend) {
   const map = new Map();
   let gl = null;
-  if (backend === 'webgl') gl = getGLSafe();
-  for (const [name, t] of parsed.tensors) {
+  if (backend === 'webgl') gl = getGL();
+  for (const [name, t] of tensors) {
     if (backend === 'webgl') {
       const rows = t.shape.length >= 2 ? t.shape[t.shape.length - 2] : 1;
       const needTranspose = t.shape.length >= 2 && rows > gl.maxTex;
@@ -2504,15 +3397,9 @@ function loadWeights(parsed, backend) {
     } else {
       map.set(name, new Tensor(t.shape, t.data, { backend: 'cpu' }));
     }
-    t.data = null; // free staging copy (tensor owns the Float32Array now / uploaded)
+    t.data = null; // free staging copy
   }
   return map;
-}
-
-let _glSafe = null;
-function getGLSafe() {
-  if (!_glSafe) _glSafe = (typeof document !== 'undefined') ? new GLBackend() : null;
-  return _glSafe;
 }
 
 class PipelineBase {
@@ -2528,17 +3415,19 @@ class PipelineBase {
 
 // ---------------------------------------------------------------------------
 class TextGenerationPipeline extends PipelineBase {
-  /**
-   * await gen('prompt', { maxNewTokens, doSample, temperature, topK, topP,
-   *                       repetitionPenalty, onToken }) ->
-   *   [{ generated_text: "prompt + completion" }]
-   */
-  async _call(text, options = {}) {
+  /** Encode with context-window truncation (keep the END of the prompt). */
+  _encodeBounded(text) {
     const ids = this.tokenizer.encode(text);
-    if (ids.length === 0) ids.push(this.tokenizer.eosTokenId ?? 0);
     const maxPos = this.model.maxPos;
     if (ids.length > maxPos - 1) ids.splice(0, ids.length - (maxPos - 1));
-    const gen = generateTokens(this.model, ids, {
+    return ids;
+  }
+
+  /** Plain completion. `onToken(id, n)` — return false to stop. */
+  async _call(text, options = {}) {
+    const ids = this._encodeBounded(text);
+    if (ids.length === 0) ids.push(this.tokenizer.eosTokenId ?? 0);
+    const gen = await generateAsync(this.model, ids, {
       maxNewTokens: options.max_new_tokens ?? options.maxNewTokens ?? 50,
       doSample: options.do_sample ?? options.doSample ?? true,
       temperature: options.temperature ?? 1.0,
@@ -2547,26 +3436,70 @@ class TextGenerationPipeline extends PipelineBase {
       repetitionPenalty: options.repetition_penalty ?? options.repetitionPenalty ?? 1.0,
       eosTokenId: options.eos_token_id ?? this.model.eosTokenId ?? this.tokenizer.eosTokenId ?? null,
       onToken: options.onToken || options.on_token || null,
+      tick: options.tick,
     });
     const full = ids.concat(gen);
-    const text2 = this.tokenizer.decode(full, { skipSpecialTokens: true });
-    return [{ generated_text: text2 }];
+    return [{ generated_text: this.tokenizer.decode(full, { skipSpecialTokens: true }) }];
+  }
+
+  /**
+   * Chat! Applies the model's real chat template (or a builtin family one).
+   *   await pipe.chat([{role:'user', content:'Hi'}], {max_new_tokens: 200})
+   * Returns [{ generated_text, assistant_message }]
+   * options.onText(delta, fullText) streams the assistant reply as text.
+   */
+  async chat(messages, options = {}) {
+    if (typeof messages === 'string') messages = [{ role: 'user', content: messages }];
+    const prompt = this.tokenizer.applyChatTemplate(messages, {
+      addGenerationPrompt: options.add_generation_prompt ?? true,
+      modelType: this.config.model_type,
+    });
+    const promptIds = this.tokenizer.encode(prompt);
+    const maxPos = this.model.maxPos;
+    if (promptIds.length > maxPos - 1) promptIds.splice(0, promptIds.length - (maxPos - 1));
+
+    let text = '';
+    const eos = options.eos_token_id ?? this.tokenizer.eosTokenId ?? this.model.eosTokenId ?? null;
+    const onToken = options.onToken || null;
+    const onText = options.onText || null;
+
+    const gen = await generateAsync(this.model, promptIds, {
+      maxNewTokens: options.max_new_tokens ?? options.maxNewTokens ?? 256,
+      doSample: options.do_sample ?? options.doSample ?? true,
+      temperature: options.temperature ?? 0.7,
+      topK: options.top_k ?? options.topK ?? 50,
+      topP: options.top_p ?? options.topP ?? 0.95,
+      repetitionPenalty: options.repetition_penalty ?? options.repetitionPenalty ?? 1.0,
+      eosTokenId: eos,
+      tick: options.tick,
+      onToken: (id, n) => {
+        if (onToken && onToken(id, n) === false) return false;
+        if (onText && id !== eos) {
+          const full = this.tokenizer.decode(promptIds.concat(gen), { skipSpecialTokens: true });
+          // token-level decode delta (fast path): decode just the new id
+          const piece = this.tokenizer.decode([id], { skipSpecialTokens: true });
+          onText(piece, text + piece);
+          text += piece;
+        }
+        return true;
+      },
+    });
+
+    const fullText = this.tokenizer.decode(promptIds.concat(gen), { skipSpecialTokens: true });
+    const assistant = this.tokenizer.decode(gen, { skipSpecialTokens: true });
+    return [{ generated_text: fullText, assistant_message: assistant }];
   }
 }
 
 // ---------------------------------------------------------------------------
 class FeatureExtractionPipeline extends PipelineBase {
-  /**
-   * await fx('hello world', { pooling: 'mean'|'cls', normalize: true }) ->
-   *   { data: Float32Array[d] }
-   */
   async _call(text, options = {}) {
     const pooling = options.pooling || 'mean';
     const normalize = options.normalize ?? false;
     const ids = this.tokenizer.encode(text, { addSpecialTokens: true });
     if (ids.length > this.model.maxPos) ids.length = this.model.maxPos;
     const [hidden] = arenaRun(() => this.model.forward(ids));
-    const h = hidden.read(); // [s, d] contiguous
+    const h = hidden.read();
     const s = hidden.rows, d = hidden.cols;
     hidden.dispose();
     const out = new Float32Array(d);
@@ -2591,29 +3524,32 @@ class FeatureExtractionPipeline extends PipelineBase {
 
 // ---------------------------------------------------------------------------
 class TextClassificationPipeline extends PipelineBase {
-  /** await cls('text') -> [{ label, score }] (sorted, best first) */
   async _call(text, options = {}) {
     const ids = this.tokenizer.encode(text, { addSpecialTokens: true });
     if (ids.length > this.model.maxPos) ids.length = this.model.maxPos;
-    let logits;
-    if (this.model.kind === 'distilbert') {
-      logits = arenaRun(() => {
+    const logits = arenaRun(() => {
+      let src;
+      if (this.model.kind === 'distilbert') {
         const [hidden] = this.model.forward(ids);
-        const first = hidden.firstRow();
-        const out = classificationHead(this.model, this._weights, this.config, first);
-        hidden.dispose();
-        return out;
-      });
-    } else {
-      logits = arenaRun(() => {
-        const usePooler = !!this.model.hasPooler;
-        const [hidden, pooled] = this.model.forward(ids, { pooled: usePooler });
-        const src = usePooler ? pooled : hidden.firstRow();
+        src = hidden.firstRow();
         const out = classificationHead(this.model, this._weights, this.config, src);
         hidden.dispose();
         return out;
-      });
-    }
+      }
+      if (this.model.kind === 'roberta') {
+        const [hidden] = this.model.forward(ids); // no pooler: first token directly
+        src = hidden.firstRow();
+        const out = classificationHead(this.model, this._weights, this.config, src);
+        hidden.dispose();
+        return out;
+      }
+      const usePooler = !!this.model.hasPooler;
+      const [hidden, pooled] = this.model.forward(ids, { pooled: usePooler });
+      src = usePooler ? pooled : hidden.firstRow();
+      const out = classificationHead(this.model, this._weights, this.config, src);
+      hidden.dispose();
+      return out;
+    });
     const arr = logits.read();
     logits.dispose();
     const pairs = [];
@@ -2621,7 +3557,6 @@ class TextClassificationPipeline extends PipelineBase {
     for (let i = 0; i < arr.length; i++) {
       pairs.push({ label: String(id2label[i] ?? i), score: arr[i] });
     }
-    // softmax over labels if logits look unnormalized
     let mx = -Infinity;
     for (const p of pairs) mx = Math.max(mx, p.score);
     let sum = 0;
@@ -2633,8 +3568,41 @@ class TextClassificationPipeline extends PipelineBase {
 }
 
 // ---------------------------------------------------------------------------
+class TokenClassificationPipeline extends PipelineBase {
+  /** NER-style: returns per-token predictions [{token, label, score}] */
+  async _call(text, options = {}) {
+    const ids = this.tokenizer.encode(text, { addSpecialTokens: true });
+    if (ids.length > this.model.maxPos) ids.length = this.model.maxPos;
+    const logits = arenaRun(() => {
+      const [hidden] = this.model.forward(ids);
+      const out = tokenClassificationHead(this.model, this._weights, hidden);
+      hidden.dispose();
+      return out;
+    });
+    const arr = logits.read(); // [s, L]
+    logits.dispose();
+    const L = arr.length / ids.length;
+    const id2label = (this.config && this.config.id2label) || {};
+    const results = [];
+    for (let r = 0; r < ids.length; r++) {
+      let best = 0;
+      for (let l = 1; l < L; l++) if (arr[r * L + l] > arr[r * L + best]) best = l;
+      // softmax over labels for the score
+      let mx = -Infinity, sum = 0;
+      for (let l = 0; l < L; l++) mx = Math.max(mx, arr[r * L + l]);
+      for (let l = 0; l < L; l++) sum += Math.exp(arr[r * L + l] - mx);
+      results.push({
+        token: this.tokenizer.idToToken.get(ids[r]),
+        label: String(id2label[best] ?? best),
+        score: Math.exp(arr[r * L + best] - mx) / sum,
+      });
+    }
+    return results;
+  }
+}
+
+// ---------------------------------------------------------------------------
 class FillMaskPipeline extends PipelineBase {
-  /** await fm('The capital of France is [MASK].') -> top token predictions */
   async _call(text, options = {}) {
     const tok = this.tokenizer;
     const maskId = tok.maskTokenId;
@@ -2665,21 +3633,17 @@ class FillMaskPipeline extends PipelineBase {
       const idx = Array.from(row.keys());
       idx.sort((a, b) => row[b] - row[a]);
       const chosen = idx.slice(0, topK);
-      // softmax over full vocab for calibrated scores
       let mx = -Infinity;
       for (let i = 0; i < row.length; i++) mx = Math.max(mx, row[i]);
       let sum = 0;
-      const ex = new Float32Array(chosen.length);
-      // compute denominators lazily on top-1000 for speed
       const idxTop = idx.slice(0, 1000);
       for (const i of idxTop) sum += Math.exp(row[i] - mx);
       for (let ci = 0; ci < chosen.length; ci++) {
         const id = chosen[ci];
-        ex[ci] = Math.exp(row[id] - mx) / (sum || 1);
         const idsCopy = ids.slice();
         idsCopy[positions[pi]] = id;
         results.push({
-          score: ex[ci],
+          score: Math.exp(row[id] - mx) / (sum || 1),
           token: tok.idToToken.get(id),
           token_id: id,
           sequence: tok.decode(idsCopy, { skipSpecialTokens: true }),
@@ -2688,6 +3652,61 @@ class FillMaskPipeline extends PipelineBase {
     }
     results.sort((a, b) => b.score - a.score);
     return results.slice(0, topK);
+  }
+}
+
+// ---------------------------------------------------------------------------
+class QuestionAnsweringPipeline extends PipelineBase {
+  /** await qa({question, context}) -> [{answer, score}] */
+  async _call(input, options = {}) {
+    let question, context;
+    if (typeof input === 'string') { question = input; context = options.context || ''; }
+    else { question = input.question; context = input.context; }
+    if (!question || !context) throw new Error('[mini.js] question-answering needs {question, context}');
+
+    const tok = this.tokenizer;
+    const cls = tok.clsTokenId ?? 101, sep = tok.sepTokenId ?? 102;
+    const qIds = tok.encode(question);
+    let cIds = tok.encode(context);
+    const maxPos = this.model.maxPos;
+    const budget = maxPos - qIds.length - 3;
+    if (budget <= 0) throw new Error('[mini.js] question too long for this model');
+    if (cIds.length > budget) cIds = cIds.slice(0, budget);
+    const ids = [cls, ...qIds, sep, ...cIds, sep];
+    const ctxStart = qIds.length + 2;            // first context token index
+    const ctxEnd = ids.length - 2;               // last context token index (inclusive)
+
+    const logits = arenaRun(() => {
+      const [hidden] = this.model.forward(ids);
+      const out = qaHead(this.model, this._weights, hidden);
+      hidden.dispose();
+      return out;
+    });
+    const arr = logits.read(); // [s, 2]
+    logits.dispose();
+
+    // best span inside the context
+    let bestS = ctxStart, bestE = ctxStart, bestScore = -Infinity;
+    for (let a = ctxStart; a <= ctxEnd; a++) {
+      const sa = arr[a * 2];
+      // limit span length to 30 tokens for sane answers + speed
+      const eMax = Math.min(ctxEnd, a + 30);
+      for (let b = a; b <= eMax; b++) {
+        const sc = sa + arr[b * 2 + 1];
+        if (sc > bestScore) { bestScore = sc; bestS = a; bestE = b; }
+      }
+    }
+    const spanIds = ids.slice(bestS, bestE + 1);
+    const answer = tok.decode(spanIds, { skipSpecialTokens: true });
+    // calibrated score over valid positions (softmax of chosen start+end)
+    let sMx = -Infinity, eMx = -Infinity;
+    for (let a = ctxStart; a <= ctxEnd; a++) sMx = Math.max(sMx, arr[a * 2]);
+    for (let b = ctxStart; b <= ctxEnd; b++) eMx = Math.max(eMx, arr[b * 2 + 1]);
+    let sSum = 0, eSum = 0;
+    for (let a = ctxStart; a <= ctxEnd; a++) sSum += Math.exp(arr[a * 2] - sMx);
+    for (let b = ctxStart; b <= ctxEnd; b++) eSum += Math.exp(arr[b * 2 + 1] - eMx);
+    const score = (Math.exp(arr[bestS * 2] - sMx) / sSum) * (Math.exp(arr[bestE * 2 + 1] - eMx) / eSum);
+    return [{ answer, score, start: bestS, end: bestE }];
   }
 }
 
@@ -2702,30 +3721,52 @@ function cat1x(rows) {
 // ---------------------------------------------------------------------------
 // Registry / factory
 // ---------------------------------------------------------------------------
-const MODEL_CLASSES = {
+const ARCH_REGISTRY = {
+  // causal LMs
   GPT2LMHeadModel: ['gpt2', GPT2Model],
   GPT2Model: ['gpt2', GPT2Model],
+  LlamaForCausalLM: ['llama', LlamaModel],
+  MistralForCausalLM: ['llama', LlamaModel],
+  Qwen2ForCausalLM: ['llama', LlamaModel],
+  Qwen3ForCausalLM: ['llama', LlamaModel],
+  GemmaForCausalLM: ['llama', LlamaModel],
+  Gemma2ForCausalLM: ['llama', LlamaModel],
+  Gemma3ForCausalLM: ['llama', LlamaModel],
+  SmolLM2ForCausalLM: ['llama', LlamaModel],
+  // encoders
   BertModel: ['bert', BertModel],
   BertForMaskedLM: ['bert', BertModel],
   BertForSequenceClassification: ['bert', BertModel],
   BertForTokenClassification: ['bert', BertModel],
+  BertForQuestionAnswering: ['bert', BertModel],
   DistilBertModel: ['distilbert', DistilBertModel],
   DistilBertForMaskedLM: ['distilbert', DistilBertModel],
   DistilBertForSequenceClassification: ['distilbert', DistilBertModel],
+  DistilBertForQuestionAnswering: ['distilbert', DistilBertModel],
+  RobertaModel: ['roberta', RobertaModel],
+  RobertaForMaskedLM: ['roberta', RobertaModel],
+  RobertaForSequenceClassification: ['roberta', RobertaModel],
+  RobertaForTokenClassification: ['roberta', RobertaModel],
+};
+
+const TYPE_FALLBACK = {
+  gpt2: 'gpt2', llama: 'llama', mistral: 'llama', qwen2: 'llama', qwen3: 'llama',
+  gemma: 'llama', gemma2: 'llama', gemma3: 'llama', smollm2: 'llama',
+  bert: 'bert', distilbert: 'distilbert', roberta: 'roberta',
 };
 
 const TASKS = {
   'text-generation': TextGenerationPipeline,
   'feature-extraction': FeatureExtractionPipeline,
   'text-classification': TextClassificationPipeline,
+  'token-classification': TokenClassificationPipeline,
   'fill-mask': FillMaskPipeline,
+  'question-answering': QuestionAnsweringPipeline,
 };
 
 const pipelineCache = new Map();
 
-/**
- * main entry: mini.pipeline(task, repo, options)
- */
+/** main entry: mini.pipeline(task, repo, options) */
 async function pipeline(task, repo, options = {}) {
   if (!TASKS[task]) {
     throw new Error(`[mini.js] unknown task "${task}". Available: ${Object.keys(TASKS).join(', ')}`);
@@ -2737,19 +3778,16 @@ async function pipeline(task, repo, options = {}) {
   const dl = await downloadModel(repo, { progressCallback, weightFile: options.weight_file || null });
   if (!dl.config) throw new Error('[mini.js] config.json missing in ' + repo);
 
-  const parsed = parseSafetensors(dl.weightsBytes);
-  dl.weightsBytes = null; // free raw bytes
-
   const backend = currentBackend();
   let weights;
   try {
-    weights = loadWeights(parsed, backend);
+    weights = loadWeights(dl.tensors, backend);
   } catch (e) {
     // e.g. huge embedding matrices exceed this device's MAX_TEXTURE_SIZE
     if (backend === 'webgl') {
       console.warn('[mini.js] weights exceed GPU limits on this device — switching to CPU backend (' + e.message + ')');
       setBackend('cpu');
-      weights = loadWeights(parsed, 'cpu');
+      weights = loadWeights(dl.tensors, 'cpu');
     } else {
       throw e;
     }
@@ -2757,15 +3795,20 @@ async function pipeline(task, repo, options = {}) {
 
   const config = dl.config;
   const arch = (config.architectures && config.architectures[0]) || '';
-  let entry = MODEL_CLASSES[arch];
+  let entry = ARCH_REGISTRY[arch];
   if (!entry) {
-    // infer from model_type
     const mt = (config.model_type || '').toLowerCase();
-    if (mt === 'gpt2') entry = MODEL_CLASSES.GPT2LMHeadModel;
-    else if (mt === 'bert') entry = MODEL_CLASSES.BertModel;
-    else if (mt === 'distilbert') entry = MODEL_CLASSES.DistilBertModel;
+    const kind = TYPE_FALLBACK[mt];
+    if (kind === 'gpt2') entry = ARCH_REGISTRY.GPT2LMHeadModel;
+    else if (kind === 'llama') entry = ARCH_REGISTRY.LlamaForCausalLM;
+    else if (kind === 'bert') entry = ARCH_REGISTRY.BertModel;
+    else if (kind === 'distilbert') entry = ARCH_REGISTRY.DistilBertModel;
+    else if (kind === 'roberta') entry = ARCH_REGISTRY.RobertaModel;
   }
-  if (!entry) throw new Error(`[mini.js] unsupported architecture "${arch}" in ${repo} (supported: GPT2*, Bert*, DistilBert*)`);
+  if (!entry) {
+    throw new Error(`[mini.js] unsupported architecture "${arch}" in ${repo}\n` +
+      `Supported: GPT-2, Llama, Mistral, Qwen2/3, Gemma 1/2/3, BERT, DistilBERT, RoBERTa`);
+  }
 
   const [, ModelClass] = entry;
   const model = new ModelClass(weights, config);
@@ -2778,14 +3821,15 @@ async function pipeline(task, repo, options = {}) {
   const pipe = new TASKS[task](task, repo, model, tokenizer, config);
   pipe._weights = weights;
 
-  // Expose the pipeline as a real callable: `await pipe(text, options)`
-  const fn = (input, options) => pipe._call(input, options || {});
+  // Expose the pipeline as a real callable: `await pipe(input, options)`
+  const fn = (input, options2) => pipe._call(input, options2 || {});
   Object.assign(fn, {
     task,
     repo,
     model,
     tokenizer,
     config,
+    chat: pipe.chat ? pipe.chat.bind(pipe) : undefined,
     _call: pipe._call.bind(pipe),
     dispose: () => { pipe.dispose(); pipelineCache.delete(cacheKey); },
   });
@@ -2794,7 +3838,7 @@ async function pipeline(task, repo, options = {}) {
   return fn;
 }
 
-/** Auto backend selection at import time (browser: WebGL2 if possible). */
+/** Auto backend selection (browser: WebGL2 if possible, after kernel self-test). */
 function ready() {
   detectBestBackend();
   return currentBackend();
@@ -2814,7 +3858,7 @@ function disposePipeline(task, repo) {
  * hand-written CPU kernels. If ANY check fails, callers should fall back to
  * the CPU backend — so users never see silently-wrong AI output.
  */
-const CK2 = { zeroFill: zeroFill, cpuMatmul: cpuMatmul, cpuAddBiasRows: cpuAddBiasRows, cpuAdd: cpuAdd, cpuMulRow: cpuMulRow, cpuScale: cpuScale, geluScalar: geluScalar, cpuGelu: cpuGelu, cpuRelu: cpuRelu, cpuSilu: cpuSilu, cpuSigmoid: cpuSigmoid, cpuSoftmaxRows: cpuSoftmaxRows, cpuLayerNorm: cpuLayerNorm, cpuEmbedding: cpuEmbedding, cpuSliceCols: cpuSliceCols, cpuScatterCols: cpuScatterCols, cpuAppendRow: cpuAppendRow, cpuRowOf: cpuRowOf };
+const CK2 = { zeroFill: zeroFill, cpuMatmul: cpuMatmul, cpuAddBiasRows: cpuAddBiasRows, cpuAdd: cpuAdd, cpuMulRow: cpuMulRow, cpuScale: cpuScale, geluScalar: geluScalar, cpuGelu: cpuGelu, cpuRelu: cpuRelu, cpuSilu: cpuSilu, cpuSigmoid: cpuSigmoid, cpuSoftmaxRows: cpuSoftmaxRows, cpuLayerNorm: cpuLayerNorm, cpuEmbedding: cpuEmbedding, cpuSliceCols: cpuSliceCols, cpuScatterCols: cpuScatterCols, cpuAppendRow: cpuAppendRow, cpuRowOf: cpuRowOf, cpuRMSNorm: cpuRMSNorm, cpuMul: cpuMul, cpuRope: cpuRope };
 
 
 function rng(seed) {
@@ -2928,6 +3972,29 @@ function selfTest() {
     const A = t([2, 7], 11);
     const got = readOf(() => A.gelu());
     return close(got, CK2.cpuGelu(A.read()), 5e-4);
+  });
+
+  test('rmsnorm (Llama family)', () => {
+    const rows = 3, cols = 10;
+    const A = t([rows, cols], 30);
+    const g = new Tensor([cols], randF32(cols, 31).map(v => 1 + v * 0.2));
+    const got = readOf(() => A.rmsnorm(g, 1e-5));
+    const ref = CK2.cpuRMSNorm(A.read(), rows, cols, g.read(), 1e-5);
+    return close(got, ref, 5e-4);
+  });
+
+  test('mul (elementwise)', () => {
+    const A = t([2, 9], 32), B = t([2, 9], 33);
+    const got = readOf(() => A.mul(B));
+    const ref = CK2.cpuMul(A.read(), B.read());
+    return close(got, ref);
+  });
+
+  test('rope (Llama RoPE)', () => {
+    const A = t([3, 12], 34); // 3 tokens, 12 cols = 2 heads x headDim 6
+    const got = readOf(() => A.rope(5, 6, 10000.0));
+    const ref = CK2.cpuRope(A.read(), 3, 12, 6, 5, 10000.0);
+    return close(got, ref, 5e-4);
   });
 
   test('add / addRowBias / scale', () => {
@@ -3049,6 +4116,8 @@ function initBackend() {
 
 
 
+
+
 // One-line convenience APIs (download + cache the default model on first use)
 const DEFAULT_MODELS = {
   'text-generation': 'openai-community/gpt2',
@@ -3123,6 +4192,9 @@ const mini = {
   initBackend,
   generate,
   generateTokens,
+  generateAsync,
+  buildChatPrompt,
+  renderChatTemplate,
   embed,
   classify,
   fillMask,
@@ -3160,6 +4232,9 @@ const MODELS = {
   tiny: { repo: 'hf-internal-testing/tiny-random-gpt2',   task: 'text-generation',    size: 500000 },
   sst2: { repo: 'distilbert/distilbert-base-uncased-finetuned-sst-2-english', task: 'text-classification', size: 268000000 },
   mlm:  { repo: 'distilbert/distilbert-base-uncased',     task: 'fill-mask',          size: 268000000 },
+  chat: { repo: 'HuggingFaceTB/SmolLM2-135M-Instruct',    task: 'text-generation',    size: 269000000 },
+  chat2:{ repo: 'Qwen/Qwen2.5-0.5B-Instruct',             task: 'text-generation',    size: 988000000 },
+  qa:   { repo: 'distilbert/distilbert-base-uncased-distilled-squad', task: 'question-answering', size: 268000000 },
 };
 const CORPUS = [
   'The cat sat on the mat and purred softly',
@@ -3172,8 +4247,24 @@ const CORPUS = [
   'The match ended in a dramatic penalty shootout',
 ];
 
-const Demo = { pipe: null, key: '', corpusVecs: null, MODELS };
+const Demo = { pipe: null, key: '', corpusVecs: null, MODELS, convo: [], stopFlag: false };
 Demo.CORPUS = CORPUS;
+Demo.runChat = async function* (userMsg, opts) {
+  Demo.convo.push({ role: 'user', content: userMsg });
+  const stream = [];
+  const gen = await Demo.pipe.chat(Demo.convo, {
+    max_new_tokens: opts.max, temperature: opts.temp, do_sample: opts.temp > 0,
+    onText: (delta, full) => stream.push(full),
+  });
+  const reply = gen[0].assistant_message;
+  Demo.convo.push({ role: 'assistant', content: reply });
+  return reply;
+};
+Demo.runQA = async function (question, context) {
+  const t0 = performance.now();
+  const [r] = await Demo.pipe({ question, context });
+  return { answer: r.answer, score: r.score, ms: performance.now() - t0 };
+};
 
 function fmtMB(n) { return (n / 1048576).toFixed(1) + ' MB'; }
 function setStatus(msg, cls) { const el = $('#status'); el.textContent = msg; el.className = 'status' + (cls ? ' ' + cls : ''); }
@@ -3217,7 +4308,13 @@ Demo.loadSelected = async function () {
 };
 
 function showPanel(key) {
-  ['st', 'tiny', 'sst2', 'mlm'].forEach(k => { $('#panel-' + k).hidden = (k !== key); });
+  ['st', 'tiny', 'sst2', 'mlm', 'chat', 'chat2', 'qa'].forEach(k => {
+    const el = document.querySelector('#panel-' + k);
+    if (el) el.hidden = (k !== key);
+  });
+  if (key === 'chat2' && document.querySelector('#panel-chat')) {
+    document.querySelector('#panel-chat').hidden = false; // shared chat panel
+  }
   if (key === 'st') switchDemo('search');
 }
 
@@ -3394,6 +4491,61 @@ function wire() {
     kv.textContent = 'best sentence: ' + (r.results[0] ? r.results[0].sequence : '—');
     $('#mlmBody').appendChild(kv);
     $('#mlmTime').textContent = r.ms.toFixed(0) + ' ms';
+    setStatus('Done — computed locally. ✔', 'ok');
+  }));
+
+  // ── chat ──
+  let chatTranscript = '';
+  $('#chatSend').addEventListener('click', guard(async () => {
+    const input = $('#chatInput');
+    const msg = input.value.trim();
+    if (!msg || !Demo.pipe) return;
+    input.value = '';
+    const body = $('#chatBody');
+    chatTranscript += (chatTranscript ? '\n\n' : '') + 'You: ' + msg + '\n\nAssistant: ';
+    body.textContent = chatTranscript;
+    const cur = document.createElement('span'); cur.className = 'cursor'; body.appendChild(cur);
+    Demo.stopFlag = false;
+    let shown = chatTranscript.length;
+    let nTokens = 0;
+    const t0 = performance.now();
+    const convo = Demo.convo.concat([{ role: 'user', content: msg }]);
+    let full = '';
+    const result = await Demo.pipe.chat(convo, {
+      max_new_tokens: parseInt($('#chatMax').value, 10) || 120,
+      temperature: parseFloat($('#chatTemp').value) || 0.7,
+      onText: (delta, fullText) => {
+        if (Demo.stopFlag) return false;
+        nTokens++;
+        full = fullText;
+        body.textContent = chatTranscript + fullText;
+        body.appendChild(cur);
+      },
+    });
+    cur.remove();
+    const reply = result[0].assistant_message;
+    Demo.convo = convo.concat([{ role: 'assistant', content: reply }]);
+    chatTranscript = chatTranscript + reply;
+    body.textContent = chatTranscript;
+    const secs = (performance.now() - t0) / 1000;
+    setStatus('Done — ' + nTokens + ' tokens · ' + secs.toFixed(1) + 's · ' + (nTokens / Math.max(secs, .001)).toFixed(1) + ' tok/s. ✔', 'ok');
+  }));
+  $('#chatStop').addEventListener('click', () => { Demo.stopFlag = true; });
+  $('#chatReset').addEventListener('click', () => { Demo.convo = []; chatTranscript = ''; $('#chatBody').textContent = ''; });
+
+  // ── question answering ──
+  $('#qaBtn').addEventListener('click', guard(async () => {
+    $('#qaOut').hidden = false;
+    $('#qaBody').textContent = 'Reading the passage…';
+    const r = await Demo.runQA($('#qaQuestion').value, $('#qaContext').value);
+    $('#qaBody').innerHTML = '';
+    const ans = document.createElement('div');
+    ans.style.fontWeight = '700'; ans.style.fontSize = '16px';
+    ans.textContent = r.answer || '(no answer found)';
+    const kv = document.createElement('div'); kv.className = 'kv';
+    kv.textContent = 'confidence: ' + (r.score * 100).toFixed(1) + '%';
+    $('#qaBody').appendChild(ans); $('#qaBody').appendChild(kv);
+    $('#qaTime').textContent = r.ms.toFixed(0) + ' ms';
     setStatus('Done — computed locally. ✔', 'ok');
   }));
 

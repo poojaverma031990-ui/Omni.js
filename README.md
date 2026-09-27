@@ -1,8 +1,8 @@
 <div align="center">
 
-# ⚡ mini.js
+# ⚡ mini.js v2
 
-### Run real AI models in your browser. One line of code.
+### Run real AI models in your browser. One line of code. Now with the Llama family.
 
 **A Transformers.js alternative written 100% from scratch in pure HTML + CSS + JavaScript.**
 Zero dependencies · No ONNX Runtime · No TensorFlow.js · No WebAssembly blobs · No native code.
@@ -36,10 +36,11 @@ plain JavaScript and runs anywhere a browser runs — one `<script>` tag, anywhe
 | **GPU kernels** | Hand-written GLSL ES 3.00: matmul (NN / transposed-B / transposed-storage), softmax, layernorm, GELU, ReLU, SiLU, sigmoid, tanh, embedding gathers, slice/scatter, mask add |
 | **Tokenizers** | Byte-level BPE (GPT-2 byte↔unicode map, merge ranks, pre-tokenizer regex) and WordPiece (greedy longest-match, `##` prefixes, CJK/punct splitting) — reading real `tokenizer.json` |
 | **safetensors parser** | Reads the binary format directly: JSON header + raw buffers, F32 / F16 / BF16 decoding via bit manipulation |
-| **Models** | GPT-2 decoder (KV-cache, causal attention, tied/untied LM head), BERT and DistilBERT encoders + classification / MLM heads |
-| **Generation** | Greedy, temperature, top-k, top-p (nucleus), repetition penalty, EOS stopping, streaming `onToken` callback |
-| **Hub client** | Streams files from huggingface.co with progress callbacks, caches in the browser (Cache API) → instant & offline after first run |
-| **GPU self-test** | Every WebGL kernel is verified against the CPU reference at load; mini.js silently falls back to CPU if anything disagrees |
+| **Models** | GPT-2 decoder (KV-cache), **LLAMA FAMILY: Llama / Mistral / Qwen2 / Qwen3 / Gemma 1-3** (RMSNorm, RoPE, SwiGLU/GeGLU, grouped-query attention, tied embeddings), **RoBERTa**, BERT, DistilBERT + classification / token-classification / QA-span / MLM heads |
+| **Generation** | Greedy, temperature, top-k, top-p (nucleus), repetition penalty, EOS stopping, streaming `onToken` (return `false` to **stop**), UI-yielding async loop |
+| **Hub client** | Streams files from huggingface.co with progress callbacks — **including sharded models** (`model.safetensors.index.json`) — caches in the browser → instant & offline after first run |
+| **GPU self-test** | Every WebGL kernel (incl. RoPE / RMSNorm / mul) is verified against the CPU reference at load; mini.js silently falls back to CPU if anything disagrees |
+| **Chat templates** | A from-scratch Jinja2-subset renderer for the real `chat_template` files models ship, plus builtin ChatML / Llama-2 / Llama-3 / Gemma templates |
 
 ~110 KB of pure JavaScript. No build step needed to *use* it (`mini.js` is a ready-made single file).
 
@@ -92,7 +93,7 @@ const [out] = await gen('The meaning of life is', {
 
 ### `mini.pipeline(task, repoId, options?) → Promise<pipeline>`
 
-Tasks: `text-generation` · `text-classification` · `feature-extraction` · `fill-mask`
+Tasks: `text-generation` (+**`.chat()`**) · `text-classification` · `feature-extraction` · `fill-mask` · `question-answering` · `token-classification`
 
 The returned pipeline is a **callable function** (plus `.model`, `.tokenizer`, `.config`, `.dispose()`):
 
@@ -128,13 +129,31 @@ Any repo with `model.safetensors` + `tokenizer.json` from these families:
 
 | Model | Task | Download |
 |---|---|---|
+| `HuggingFaceTB/SmolLM2-135M-Instruct` | **chat (Llama arch)** | ~269 MB (BF16) |
+| `Qwen/Qwen2.5-0.5B-Instruct` | **chat (Qwen2 arch)** | ~988 MB (BF16) |
+| `TinyLlama/TinyLlama-1.1B-Chat-v1.0` | chat (Llama arch, sharded) | ~2.2 GB (BF16) |
 | `openai-community/gpt2` | text-generation | ~548 MB |
 | `distilbert/distilgpt2` | text-generation | ~355 MB |
 | `hf-internal-testing/tiny-random-gpt2` | text-generation (smoke test) | <1 MB |
 | `distilbert/distilbert-base-uncased-finetuned-sst-2-english` | text-classification | ~268 MB |
 | `sentence-transformers/all-MiniLM-L6-v2` | feature-extraction | ~90 MB |
 | `distilbert/distilbert-base-uncased` | fill-mask | ~268 MB |
-| `google-bert/bert-base-uncased` | fill-mask / embeddings | ~440 MB |
+| `distilbert/distilbert-base-uncased-distilled-squad` | **question-answering** | ~268 MB |
+| `google-bert/bert-base-uncased` | fill-mask / QA / embeddings | ~440 MB |
+
+Any Llama/Mistral/Qwen2/Gemma fine-tune with `model.safetensors` (single or **sharded**) + `tokenizer.json`
+loads the same way — the engine reads BF16/FP16 weights directly.
+
+**Chat in one line:**
+
+```js
+const llm = await mini.pipeline('text-generation', 'HuggingFaceTB/SmolLM2-135M-Instruct');
+const [out] = await llm.chat([{ role: 'user', content: 'Explain gravity simply.' }], {
+  max_new_tokens: 200,
+  temperature: 0.7,
+  onText: (delta, full) => console.log(delta), // streams tokens as text
+});
+console.log(out.assistant_message);
 
 > 💡 Models are downloaded **once**, stored in the browser Cache API, and then load instantly and work offline.
 
@@ -164,7 +183,7 @@ Then open the playground, pick a model, press **Run**.
 
 ```bash
 npm run build        # bundles src/*.js into the single-file mini.js (custom bundler, no deps)
-npm test             # 22 unit tests + 8 end-to-end tests (no network needed)
+npm test             # 57 tests: unit + e2e + real-vocab tokenizer + v2 capabilities + demo app (no network needed)
 ```
 
 The test-suite builds **synthetic models in exact Hugging Face format**, serves them over HTTP,
@@ -183,11 +202,12 @@ the prompt.
 
 ## Roadmap
 
-- [ ] Quantized (Q8/Q4) weight loading for 4–8× smaller downloads
+- [x] ~~Llama / RoPE architectures (RMSNorm, SwiGLU, GQA)~~ **done in v2**
+- [x] ~~Sharded safetensors~~ · ~~chat templates~~ · ~~streaming with stop~~ **done in v2**
+- [ ] Quantized (Q8/Q4) weight loading for 2–4× smaller downloads
 - [ ] WebGPU backend
-- [ ] Llama / RoPE architectures (RMSNorm, SwiGLU, GQA)
 - [ ] Encoder–decoder (T5-style) models
-- [ ] Whisper speech recognition
+- [ ] Whisper speech recognition · vision (ViT/CLIP)
 - [ ] Batching + padding for multi-sequence inputs
 
 ## License

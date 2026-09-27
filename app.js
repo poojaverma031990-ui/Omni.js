@@ -47,6 +47,33 @@
       ],
       defaults: {},
     },
+    'chat': {
+      label: 'Chat',
+      isChat: true,
+      models: [
+        { id: 'HuggingFaceTB/SmolLM2-135M-Instruct', name: 'SmolLM2-135M-Instruct — real instruct LLM', size: '~269 MB' },
+        { id: 'Qwen/Qwen2.5-0.5B-Instruct', name: 'Qwen2.5-0.5B-Instruct', size: '~988 MB' },
+      ],
+      input: 'Say hello and tell me what you are.',
+      samples: [
+        'Say hello and tell me what you are.',
+        'Explain gravity to me like I am five.',
+        'Give me three quick tips for learning JavaScript.',
+      ],
+      defaults: {},
+    },
+    'question-answering': {
+      label: 'QA',
+      models: [
+        { id: 'distilbert/distilbert-base-uncased-distilled-squad', name: 'DistilBERT SQuAD (extractive QA)', size: '~268 MB' },
+      ],
+      input: 'Which name is also used to describe the Amazon rainforest in English?\n---\nThe Amazon rainforest, also known in English as Amazonia or the Amazon Jungle, is a moist broadleaf forest that covers most of the Amazon basin of South America.',
+      samples: [
+        'Which name is also used to describe the Amazon rainforest in English?\n---\nThe Amazon rainforest, also known in English as Amazonia or the Amazon Jungle, is a moist broadleaf forest that covers most of the Amazon basin of South America.',
+        'Who wrote the theory of general relativity?\n---\nAlbert Einstein developed the theory of relativity, which transformed theoretical physics and astronomy during the 20th century.',
+      ],
+      defaults: {},
+    },
     'fill-mask': {
       label: 'Fill mask',
       models: [
@@ -67,6 +94,9 @@
   let loadedPipe = null;   // { key, pipe }
   let running = false;
   let tokenBuf = [];
+  let convo = [];          // chat history
+  let chatTranscript = ''; // rendered transcript text
+  let stopFlag = false;
 
   const el = {
     tabs: $('#taskTabs'),
@@ -124,6 +154,8 @@
       'text-classification': 'Text to classify',
       'feature-extraction': 'Text to embed',
       'fill-mask': 'Text with [MASK]',
+      'chat': 'First message (conversation continues below)',
+      'question-answering': 'Question, then a line with ---, then the context',
     };
     $('#inputLabel').textContent = labels[currentTask];
     el.inputText.value = cfg.input;
@@ -218,6 +250,60 @@
     el.timingBadge.textContent = `${n} tokens · ${secs.toFixed(1)}s · ${(n / Math.max(secs, 0.001)).toFixed(1)} tok/s`;
   }
 
+  async function runChat(pipe, userMsg) {
+    if (el.outputArea.hidden) { chatTranscript = ''; convo = []; }
+    el.outputArea.hidden = false;
+    el.outputTitle.textContent = 'Chat — ' + (pipe.repo || 'LLM');
+    chatTranscript += (chatTranscript ? '\n\n' : '') + 'You: ' + userMsg + '\n\nAssistant: ';
+    el.outputBody.textContent = chatTranscript;
+    const cur = document.createElement('span');
+    cur.className = 'cursor';
+    el.outputBody.appendChild(cur);
+    stopFlag = false;
+    const t0 = performance.now();
+    let nTokens = 0;
+    const history = convo.concat([{ role: 'user', content: userMsg }]);
+    const result = await pipe.chat(history, {
+      max_new_tokens: parseInt(el.maxTokens.value, 10) || 120,
+      temperature: parseFloat(el.temperature.value) || 0.7,
+      onText: (delta, full) => {
+        if (stopFlag) return false;
+        nTokens++;
+        el.outputBody.textContent = chatTranscript + full;
+        el.outputBody.appendChild(cur);
+      },
+    });
+    cur.remove();
+    const reply = result[0].assistant_message;
+    convo = history.concat([{ role: 'assistant', content: reply }]);
+    chatTranscript += reply;
+    el.outputBody.textContent = chatTranscript;
+    const secs = (performance.now() - t0) / 1000;
+    el.timingBadge.textContent = `${nTokens} tok · ${secs.toFixed(1)}s · ${(nTokens / Math.max(secs, 0.001)).toFixed(1)} tok/s`;
+  }
+
+  async function runQA(pipe, text) {
+    const sep = text.indexOf('\n---\n');
+    if (sep === -1) throw new Error('Enter the question, then a line with ---, then the context.');
+    const question = text.slice(0, sep).trim();
+    const context = text.slice(sep + 5).trim();
+    showOutput('Answer');
+    const t0 = performance.now();
+    const [r] = await pipe({ question, context });
+    const ms = performance.now() - t0;
+    el.outputBody.innerHTML = '';
+    const ans = document.createElement('div');
+    ans.style.fontWeight = '700';
+    ans.style.fontSize = '16px';
+    ans.textContent = r.answer || '(no answer found)';
+    const kv = document.createElement('div');
+    kv.className = 'kv';
+    kv.textContent = 'confidence: ' + (r.score * 100).toFixed(1) + '%';
+    el.outputBody.appendChild(ans);
+    el.outputBody.appendChild(kv);
+    el.timingBadge.textContent = ms.toFixed(0) + ' ms';
+  }
+
   async function runClassification(pipe, text) {
     showOutput('Classification');
     const t0 = performance.now();
@@ -300,7 +386,9 @@
       if (!text) throw new Error('Please enter some text first.');
       const pipe = await getPipe();
       setStatus('Running on your device…', 'ok');
-      if (currentTask === 'text-generation') await runGeneration(pipe, text);
+      if (currentTask === 'chat') await runChat(pipe, text);
+      else if (currentTask === 'question-answering') await runQA(pipe, text);
+      else if (currentTask === 'text-generation') await runGeneration(pipe, text);
       else if (currentTask === 'text-classification') await runClassification(pipe, text);
       else if (currentTask === 'feature-extraction') await runEmbedding(pipe, text);
       else if (currentTask === 'fill-mask') await runFillMask(pipe, text);
@@ -331,6 +419,7 @@
   });
   el.inputText.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') run();
+    if (e.key === 'Escape') stopFlag = true; // stops a streaming chat reply
   });
   el.copyOut.addEventListener('click', () => {
     navigator.clipboard.writeText(el.outputBody.textContent).then(() => {

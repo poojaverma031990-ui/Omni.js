@@ -50,7 +50,7 @@ console.log(out.generated_text);</pre>
     <div class="stats">
       <div class="stat"><b>0</b><span>dependencies</span></div>
       <div class="stat"><b>~110 KB</b><span>engine, pure JS</span></div>
-      <div class="stat"><b>4</b><span>AI tasks</span></div>
+      <div class="stat"><b>6</b><span>AI tasks</span></div>
       <div class="stat"><b>GPU+CPU</b><span>WebGL2 &amp; fallback</span></div>
       <div class="stat"><b>100%</b><span>on-device &amp; private</span></div>
     </div>
@@ -69,6 +69,8 @@ console.log(out.generated_text);</pre>
         <button class="tab" data-task="text-classification">🎭 Sentiment</button>
         <button class="tab" data-task="feature-extraction">🧭 Embeddings</button>
         <button class="tab" data-task="fill-mask">🕳 Fill mask</button>
+        <button class="tab" data-task="chat">💬 Chat (LLMs)</button>
+        <button class="tab" data-task="question-answering">❓ Question answering</button>
       </div>
 
       <div class="controls">
@@ -211,6 +213,9 @@ const [out] = await gen('Once upon a time', {
           <tr><td><code>distilbert/distilbert-base-uncased</code></td><td>fill-mask</td><td>~268 MB</td><td>Masked language model</td></tr>
           <tr><td><code>hf-internal-testing/tiny-random-gpt2</code></td><td>text-generation</td><td>&lt;1 MB</td><td>Instant smoke test</td></tr>
           <tr><td><code>google-bert/bert-base-uncased</code></td><td>fill-mask / embeddings</td><td>~440 MB</td><td>BERT base</td></tr>
+          <tr><td><code>HuggingFaceTB/SmolLM2-135M-Instruct</code></td><td>chat (Llama arch)</td><td>~269 MB (BF16)</td><td>Real instruct LLM — RMSNorm+RoPE+GQA</td></tr>
+          <tr><td><code>Qwen/Qwen2.5-0.5B-Instruct</code></td><td>chat (Qwen2 arch)</td><td>~988 MB (BF16)</td><td>Larger LLM chat, same engine</td></tr>
+          <tr><td><code>distilbert/distilbert-base-uncased-distilled-squad</code></td><td>question-answering</td><td>~268 MB</td><td>Extractive QA (SQuAD)</td></tr>
         </tbody>
       </table>
     </div>
