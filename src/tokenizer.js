@@ -247,11 +247,11 @@ export class Tokenizer {
         this.specialTokenIds[key] = this.vocab.get(content);
       }
     }
-    // normalizer info for wordpiece
-    const normz = tj.normalizer || {};
-    this.lowercase = this.config.do_lower_case !== undefined
-      ? !!this.config.do_lower_case
-      : JSON.stringify(normz).includes('Lowercase');
+    // normalizer info for wordpiece — read structured fields, not string sniffing
+    const normz = (tj.normalizer && typeof tj.normalizer === 'object') ? tj.normalizer : {};
+    if (this.config.do_lower_case !== undefined) this.lowercase = !!this.config.do_lower_case;
+    else if (normz.lowercase !== undefined) this.lowercase = !!normz.lowercase;
+    else this.lowercase = this.kind === 'wordpiece'; // BERT-family default: uncased
     this.stripAccents = this.config.strip_accents !== undefined
       ? !!this.config.strip_accents
       : true;

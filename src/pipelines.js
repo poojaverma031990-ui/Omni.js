@@ -90,6 +90,7 @@ export class FeatureExtractionPipeline extends PipelineBase {
     const pooling = options.pooling || 'mean';
     const normalize = options.normalize ?? false;
     const ids = this.tokenizer.encode(text, { addSpecialTokens: true });
+    if (ids.length > this.model.maxPos) ids.length = this.model.maxPos;
     const [hidden] = arenaRun(() => this.model.forward(ids));
     const h = hidden.read(); // [s, d] contiguous
     const s = hidden.rows, d = hidden.cols;
@@ -266,7 +267,19 @@ export async function pipeline(task, repo, options = {}) {
   dl.weightsBytes = null; // free raw bytes
 
   const backend = currentBackend();
-  const weights = loadWeights(parsed, backend);
+  let weights;
+  try {
+    weights = loadWeights(parsed, backend);
+  } catch (e) {
+    // e.g. huge embedding matrices exceed this device's MAX_TEXTURE_SIZE
+    if (backend === 'webgl') {
+      console.warn('[mini.js] weights exceed GPU limits on this device — switching to CPU backend (' + e.message + ')');
+      setBackend('cpu');
+      weights = loadWeights(parsed, 'cpu');
+    } else {
+      throw e;
+    }
+  }
 
   const config = dl.config;
   const arch = (config.architectures && config.architectures[0]) || '';

@@ -138,6 +138,20 @@ Any repo with `model.safetensors` + `tokenizer.json` from these families:
 
 > 💡 Models are downloaded **once**, stored in the browser Cache API, and then load instantly and work offline.
 
+## One-file evaluation demo
+
+**`demo.html`** is a single self-contained HTML file (the whole engine is inlined).
+Open it in any browser — no server, no install, works from `file://` — pick a model
+and press Load. It ships with:
+
+- `sentence-transformers/all-MiniLM-L6-v2` (~91 MB) — embeddings, cosine similarity, semantic search
+- `hf-internal-testing/tiny-random-gpt2` (<1 MB) — instant text-generation engine test
+- `distilbert/…-sst-2-english` (~268 MB) — sentiment
+- `distilbert/distilbert-base-uncased` (~268 MB) — fill-mask
+
+To edit the demo, change `demo.template.html` and run `npm run build` (it re-inlines the engine).
+Append `?hub=<url>` to point the page at a different hub (self-hosting / testing).
+
 ## Run the demo site locally
 
 ```bash

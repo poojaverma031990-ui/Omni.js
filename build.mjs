@@ -100,7 +100,7 @@ const banner = `/*!
  * A Transformers.js alternative written 100% from scratch: pure HTML/CSS/JS,
  * zero dependencies, no ONNX Runtime, no TensorFlow.js, no WebAssembly blobs.
  *
- *   <script src="mini.js"></script>
+ *   <script src="mini.js"><\/script>
  *   const gen = await mini.pipeline('text-generation', 'openai-community/gpt2');
  *   const [out] = await gen('Once upon a time');
  *
@@ -122,7 +122,10 @@ if (typeof __EXPORT_DEFAULT__ !== 'undefined' && __EXPORT_DEFAULT__) {
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 `;
 
-const bundle = banner + parts.join('\n\n') + footer;
+let bundle = banner + parts.join('\n\n') + footer;
+// make the engine safe to inline into HTML: neutralize literal script-closing tags
+// (a JS comment containing "<\/script" is inert, but ends nothing in HTML)
+bundle = bundle.replace(/<\/script/g, '<\\/script');
 writeFileSync(OUT, bundle);
 const kb = (Buffer.byteLength(bundle) / 1024).toFixed(1);
 console.log(`✓ built mini.js (${kb} KB, ${ORDER.length} modules)`);

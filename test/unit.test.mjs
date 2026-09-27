@@ -279,4 +279,17 @@ await okAsync('generation: greedy is deterministic', async () => {
   assert.equal(a.length, 8);
 });
 
+
+// ── regression: lowercase derived from normalizer JSON (not just config) ──
+{
+  const bj = makeBertFiles();
+  const tj = JSON.parse(bj.files['tokenizer.json']);
+  const tokNoConfig = new Tokenizer(tj, {}, 'wordpiece'); // NO do_lower_case config
+  ok('WordPiece: lowercase derived from normalizer.lowercase', () => {
+    const ids = tokNoConfig.encode('The CATS');
+    assert.deepEqual(ids, [bj.vocab.get('the'), bj.vocab.get('cat'), bj.vocab.get('##s')]);
+  });
+}
+
 console.log(`\n${passed} tests passed${process.exitCode ? ' (WITH FAILURES)' : ''}`);
+

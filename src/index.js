@@ -3,11 +3,11 @@
  *
  * One line of code, any browser in the world:
  *
- *   <script src="mini.js"></script>
+ *   <script src="mini.js"><\/script>
  *   <script>
  *     const gen = await mini.pipeline('text-generation', 'openai-community/gpt2');
  *     const [out] = await gen('Once upon a time');
- *   </script>
+ *   <\/script>
  *
  * Backends: WebGL2 (hand-written GLSL kernels) with automatic CPU fallback.
  * No ONNX Runtime. No TF.js. No external code. HTML+CSS+JS only.
