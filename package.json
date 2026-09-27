@@ -1,0 +1,21 @@
+{
+  "name": "mini.js",
+  "version": "1.0.0",
+  "description": "Run real AI models in your browser with one line of code. A Transformers.js alternative written 100% from scratch in pure HTML/CSS/JS — zero dependencies.",
+  "type": "module",
+  "main": "mini.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node test/unit.test.mjs && node test/e2e.test.mjs && node test/real-tokenizer.test.mjs",
+    "serve": "node serve.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/poojaverma031990-ui/Omni.js"
+  },
+  "keywords": ["ai", "transformers", "llm", "webgl", "browser", "machine-learning", "gpt2", "bert", "onnx-free"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
