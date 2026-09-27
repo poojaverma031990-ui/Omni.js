@@ -15,6 +15,7 @@
     <a class="logo" href="#top">mini<span>.js</span></a>
     <div class="nav-links">
       <a href="#playground">Playground</a>
+      <a href="#add">Get started</a>
       <a href="#code">One-line API</a>
       <a href="#how">How it works</a>
       <a href="#models">Models</a>
@@ -34,12 +35,12 @@
 
     <div class="install-box">
       <div class="install-row">
-        <code>&lt;script src="mini.js"&gt;&lt;/script&gt;</code>
-        <button class="copy-btn" data-copy='<script src="mini.js"></script>'>Copy</button>
+        <code>&lt;script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@main/mini.js"&gt;&lt;/script&gt;</code>
+        <button class="copy-btn" data-copy='<script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@main/mini.js"></script>'>Copy</button>
       </div>
-      <pre class="install-code">const gen = await mini.pipeline('text-generation', 'openai-community/gpt2');
-const [out] = await gen('Once upon a time');
-console.log(out.generated_text);</pre>
+      <pre class="install-code">const llm = await mini.pipeline('text-generation', 'HuggingFaceTB/SmolLM2-135M-Instruct');
+const [out] = await llm.chat('Explain gravity simply.');
+console.log(out.assistant_message);</pre>
     </div>
 
     <div class="hero-ctas">
@@ -56,6 +57,67 @@ console.log(out.generated_text);</pre>
     </div>
   </div>
 </header>
+
+<!-- ═══════════════════════ ADD TO YOUR SITE ═══════════════════════ -->
+<section class="section alt" id="add">
+  <div class="container">
+    <h2>Add it to any site in 30 seconds</h2>
+    <p class="section-sub">One <code>&lt;script&gt;</code> tag — from GitHub Pages or jsDelivr, your choice. No npm, no build step, no keys. Works on plain HTML pages, React/Vue/Svelte apps, Web Workers (<code>importScripts</code>), and even <code>file://</code>.</p>
+
+    <div class="install-box" style="max-width:none">
+      <div class="install-row">
+        <code>&lt;script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@main/mini.js"&gt;&lt;/script&gt;</code>
+        <button class="copy-btn" data-copy='<script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@main/mini.js"></script>'>Copy the one-liner</button>
+      </div>
+      <pre class="install-code">&lt;!-- GitHub Pages (this site) --&gt;
+&lt;script src="https://poojaverma031990-ui.github.io/Omni.js/mini.js"&gt;&lt;/script&gt;
+
+&lt;!-- or jsDelivr CDN (pinned to v2.0.0) --&gt;
+&lt;script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@v2.0.0/mini.js"&gt;&lt;/script&gt;</pre>
+    </div>
+
+    <div class="code-grid">
+      <div class="code-card">
+        <h3>💬 Chat with an LLM</h3>
+        <pre><code>const llm = await mini.pipeline(
+  'text-generation', 'HuggingFaceTB/SmolLM2-135M-Instruct');
+const [r] = await llm.chat('Hi!');
+console.log(r.assistant_message);</code></pre>
+        <button class="copy-btn" data-copy="const llm = await mini.pipeline('text-generation', 'HuggingFaceTB/SmolLM2-135M-Instruct');
+const [r] = await llm.chat('Hi!');
+console.log(r.assistant_message);">Copy</button>
+      </div>
+      <div class="code-card">
+        <h3>🎭 Sentiment</h3>
+        <pre><code>const cls = await mini.pipeline('text-classification',
+  'distilbert/distilbert-base-uncased-finetuned-sst-2-english');
+const [top] = await cls('I love this!');
+// → { label: 'POSITIVE', score: 0.999 }</code></pre>
+        <button class="copy-btn" data-copy="const cls = await mini.pipeline('text-classification', 'distilbert/distilbert-base-uncased-finetuned-sst-2-english');
+const [top] = await cls('I love this!');
+console.log(top);">Copy</button>
+      </div>
+      <div class="code-card">
+        <h3>🧭 Embeddings</h3>
+        <pre><code>const vec = await mini.embed('Hello world');
+// → Float32Array(384), unit length</code></pre>
+        <button class="copy-btn" data-copy="const vec = await mini.embed('Hello world');
+console.log(vec);">Copy</button>
+      </div>
+      <div class="code-card">
+        <h3>❓ Question answering</h3>
+        <pre><code>const qa = await mini.pipeline('question-answering',
+  'distilbert/distilbert-base-uncased-distilled-squad');
+const [a] = await qa({ question: 'Who?',
+  context: 'Ada Lovelace wrote the first algorithm.' });</code></pre>
+        <button class="copy-btn" data-copy="const qa = await mini.pipeline('question-answering', 'distilbert/distilbert-base-uncased-distilled-squad');
+const [a] = await qa({ question: 'Who?', context: 'Ada Lovelace wrote the first algorithm.' });
+console.log(a.answer);">Copy</button>
+      </div>
+    </div>
+    <p class="section-sub" style="margin-top:18px">That's the whole integration. Models stream from huggingface.co (CORS-enabled), cache in the user's browser, and then run 100% on-device — your servers never see a byte of user data.</p>
+  </div>
+</section>
 
 <!-- ═══════════════════════ PLAYGROUND ═══════════════════════ -->
 <section class="section" id="playground">
