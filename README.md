@@ -59,8 +59,8 @@ plain JavaScript and runs anywhere a browser runs — one `<script>` tag, anywhe
 **Or use it in ANY website or app with ONE line — no install at all:**
 
 ```html
-<!-- jsDelivr CDN, pinned to v2.0.0 -->
-<script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@v2.0.0/mini.js"></script>
+<!-- jsDelivr CDN, pinned to v2.4.0 -->
+<script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@v2.4.0/mini.js"></script>
 
 <!-- or GitHub Pages -->
 <script src="https://poojaverma031990-ui.github.io/Omni.js/mini.js"></script>
@@ -70,7 +70,7 @@ plain JavaScript and runs anywhere a browser runs — one `<script>` tag, anywhe
 ```
 
 ```html
-<script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@v2.0.0/mini.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@v2.4.0/mini.js"></script>
 <script>
   const llm = await mini.pipeline('text-generation', 'HuggingFaceTB/SmolLM2-135M-Instruct');
   const [out] = await llm.chat('Hello!');
@@ -79,7 +79,7 @@ plain JavaScript and runs anywhere a browser runs — one `<script>` tag, anywhe
 ```
 
 Works in plain HTML, React/Vue/Svelte (drop the tag in `index.html`), and web workers
-(`importScripts('https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@v2.0.0/mini.js')`
+(`importScripts('https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@v2.4.0/mini.js')`
 → `self.mini`). Live docs & playground: **https://poojaverma031990-ui.github.io/Omni.js/**
 
 **2. One-line convenience APIs**
