@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>mini.js — real-model evaluation (single file)</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+<style>
+  :root {
+    --bg:#07080d; --card:rgba(255,255,255,.04); --border:rgba(255,255,255,.1);
+    --text:#eef0f6; --muted:#98a0b3; --a1:#7c6cff; --a2:#14e0c0; --a3:#ff5c8a;
+    --grad:linear-gradient(90deg,#7c6cff,#14e0c0);
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:880px;margin:0 auto;padding:28px 20px 80px}
+  h1{font-size:30px;letter-spacing:-.8px;margin:0 0 6px}
+  h1 span{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{color:var(--muted);margin:0 0 22px;font-size:15px}
+  .card{border:1px solid var(--border);border-radius:14px;background:var(--card);padding:20px;margin-bottom:18px}
+  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  select,input[type=text],input[type=number],textarea{
+    background:#0a0c13;color:var(--text);border:1px solid var(--border);border-radius:10px;
+    padding:10px 12px;font-size:14.5px;outline:none;font-family:inherit}
+  select:focus,input:focus,textarea:focus{border-color:var(--a1)}
+  textarea{width:100%;resize:vertical;font-family:var(--mono);font-size:14px}
+  button{border:1px solid transparent;border-radius:11px;padding:11px 22px;font-size:15px;font-weight:600;cursor:pointer;transition:.15s}
+  .btn-p{background:var(--grad);color:#07100e}
+  .btn-p:hover{transform:translateY(-1px)}
+  .btn-p:disabled{opacity:.5;cursor:wait;transform:none}
+  .btn-g{background:transparent;border-color:var(--border);color:var(--text)}
+  .badge{font-size:12px;padding:4px 11px;border-radius:999px;border:1px solid var(--border);color:var(--muted);background:var(--card)}
+  .badge.good{background:var(--a2);color:#07100e;font-weight:700;border-color:transparent}
+  .status{color:var(--muted);font-size:14px;flex:1;min-width:180px}
+  .status.err{color:var(--a3)} .status.ok{color:var(--a2)}
+  .bar{height:10px;border-radius:999px;background:rgba(255,255,255,.07);overflow:hidden;margin-top:10px}
+  .bar>i{display:block;height:100%;width:0;background:var(--grad);transition:width .12s linear}
+  .meta{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:6px}
+  .out{border:1px solid var(--border);border-radius:12px;background:#0a0c13;margin-top:16px;overflow:hidden}
+  .out .head{display:flex;justify-content:space-between;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border);color:var(--muted);font-size:13px}
+  .out .body{padding:14px 16px;font-size:15px;white-space:pre-wrap;word-break:break-word}
+  .srow{display:flex;align-items:center;gap:12px;margin:9px 0}
+  .slabel{width:210px;font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .strack{flex:1;height:20px;background:rgba(255,255,255,.06);border-radius:6px;overflow:hidden}
+  .sfill{height:100%;background:var(--grad);display:flex;align-items:center;justify-content:flex-end;padding-right:8px;font-size:11.5px;color:#07100e;font-weight:800;min-width:48px}
+  .vec{display:flex;gap:2px;align-items:flex-end;height:64px;margin:10px 0}
+  .vec i{flex:1;border-radius:2px 2px 0 0;min-width:2px}
+  .kv{font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+  .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 16px}
+  .tab{border:1px solid var(--border);background:transparent;color:var(--muted);padding:8px 15px;border-radius:10px;font-size:14px;font-weight:600}
+  .tab.on{background:var(--grad);color:#07100e;border-color:transparent}
+  .foot{color:var(--muted);font-size:13px;text-align:center;margin-top:34px}
+  .foot code{font-family:var(--mono);background:var(--card);border:1px solid var(--border);padding:1px 6px;border-radius:6px;font-size:12px}
+  .cursor{display:inline-block;width:8px;height:16px;background:var(--a2);animation:blink 1s steps(1) infinite;vertical-align:text-bottom;margin-left:2px}
+  @keyframes blink{50%{opacity:0}}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>mini<span>.js</span> — real-model evaluation</h1>
+  <p class="sub">This page runs a genuine Hugging Face transformer model <b>entirely in your browser</b> using our
+    from-scratch engine (110&nbsp;KB of pure JS, zero dependencies, no ONNX / no WebAssembly).
+    Pick a model, click Load once — it streams into your browser cache, then runs offline forever.</p>
+
+  <div class="card">
+    <div class="row">
+      <select id="modelSel" style="flex:1;min-width:260px">
+        <option value="st">sentence-transformers/all-MiniLM-L6-v2 — the “real model” · ~91 MB · embeddings/similarity/search</option>
+        <option value="tiny">hf-internal-testing/tiny-random-gpt2 · &lt;1 MB · instant text-generation test</option>
+        <option value="sst2">distilbert/…-sst-2-english · ~268 MB · sentiment (91% acc)</option>
+        <option value="mlm">distilbert/distilbert-base-uncased · ~268 MB · fill-mask</option>
+        <option value="chat">⭐ HuggingFaceTB/SmolLM2-135M-Instruct · ~269 MB · real LLM chat (Llama arch)</option>
+        <option value="chat2">Qwen/Qwen2.5-0.5B-Instruct · ~988 MB · real LLM chat (Qwen2 arch)</option>
+        <option value="qa">distilbert/…-distilled-squad · ~268 MB · question answering</option>
+      </select>
+      <button class="btn-p" id="loadBtn">⬇ Load model</button>
+    </div>
+    <div class="bar" id="progBar" style="display:none"><i id="progFill"></i></div>
+    <div class="meta" id="progMeta"></div>
+    <div class="row" style="margin-top:12px">
+      <div class="status" id="status">Choose a model and press Load. Recommended: the 91 MB MiniLM.</div>
+      <span class="badge" id="backendBadge">checking backend…</span>
+      <span class="badge" id="cacheBadge" hidden>⚡ cached — instant &amp; offline</span>
+    </div>
+  </div>
+
+  <!-- ── MiniLM panels ── -->
+  <div class="card" id="panel-st" hidden>
+    <div class="tabs">
+      <button class="tab on" data-demo="search">🔎 Semantic search</button>
+      <button class="tab" data-demo="sim">⚖️ Similarity</button>
+      <button class="tab" data-demo="embed">🧭 Embedding</button>
+    </div>
+
+    <div id="demo-search">
+      <label class="kv">Query</label>
+      <input type="text" id="searchQuery" style="width:100%" value="a kitten lying on a soft carpet">
+      <button class="btn-p" id="searchBtn" style="margin-top:10px">Search 8 sentences</button>
+      <div class="out" id="searchOut" hidden><div class="head"><span>Ranked by cosine similarity</span><span class="kv" id="searchTime"></span></div><div class="body" id="searchBody"></div></div>
+      <details style="margin-top:12px"><summary class="kv">the 8 sentences being searched</summary>
+        <div class="kv" id="corpusList" style="margin-top:8px"></div>
+      </details>
+    </div>
+
+    <div id="demo-sim" hidden>
+      <label class="kv">Sentence A</label>
+      <input type="text" id="simA" style="width:100%" value="The cat sat on the mat">
+      <label class="kv" style="display:block;margin-top:8px">Sentence B</label>
+      <input type="text" id="simB" style="width:100%" value="A feline rested on the rug">
+      <button class="btn-p" id="simBtn" style="margin-top:10px">Compare</button>
+      <div class="out" id="simOut" hidden><div class="head"><span>Cosine similarity</span><span class="kv" id="simTime"></span></div><div class="body" id="simBody"></div></div>
+    </div>
+
+    <div id="demo-embed" hidden>
+      <label class="kv">Text to embed</label>
+      <textarea id="embedText" rows="2">The quick brown fox jumps over the lazy dog</textarea>
+      <button class="btn-p" id="embedBtn" style="margin-top:10px">Embed</button>
+      <div class="out" id="embedOut" hidden><div class="head"><span>384-dim vector (first 64 dims)</span><span class="kv" id="embedTime"></span></div><div class="body" id="embedBody"></div></div>
+    </div>
+  </div>
+
+  <!-- ── tiny GPT-2 panel ── -->
+  <div class="card" id="panel-tiny" hidden>
+    <label class="kv">Prompt <span style="color:#f66">(this model has RANDOM weights — it tests the engine, not language quality)</span></label>
+    <input type="text" id="genPrompt" style="width:100%" value="Once upon a time">
+    <div class="row" style="margin-top:10px">
+      <label class="kv">New tokens <input type="number" id="genN" value="24" min="1" max="64" style="width:70px"></label>
+      <button class="btn-p" id="genBtn">Generate</button>
+    </div>
+    <div class="out" id="genOut" hidden><div class="head"><span>Generated</span><span class="kv" id="genTime"></span></div><div class="body" id="genBody"></div></div>
+  </div>
+
+  <!-- ── SST-2 panel ── -->
+  <div class="card" id="panel-sst2" hidden>
+    <label class="kv">Text to classify</label>
+    <textarea id="clsText" rows="2">I absolutely loved this movie — the acting was incredible!</textarea>
+    <button class="btn-p" id="clsBtn" style="margin-top:10px">Classify</button>
+    <div class="out" id="clsOut" hidden><div class="head"><span>Sentiment</span><span class="kv" id="clsTime"></span></div><div class="body" id="clsBody"></div></div>
+  </div>
+
+  <!-- ── MLM panel ── -->
+  <div class="card" id="panel-mlm" hidden>
+    <label class="kv">Text with [MASK]</label>
+    <textarea id="mlmText" rows="2">The capital of France is [MASK].</textarea>
+    <button class="btn-p" id="mlmBtn" style="margin-top:10px">Fill the mask</button>
+    <div class="out" id="mlmOut" hidden><div class="head"><span>Top predictions</span><span class="kv" id="mlmTime"></span></div><div class="body" id="mlmBody"></div></div>
+  </div>
+
+  <!-- ── LLM chat panel ── -->
+  <div class="card" id="panel-chat" hidden>
+    <label class="kv">Multi-turn chat — SmolLM2 (a real instruct LLM, Llama architecture: RMSNorm + RoPE + SwiGLU + GQA). Replies stream token-by-token. Press <b>Stop</b> to cut a reply short.</label>
+    <div class="out" id="chatLog" style="margin-top:10px"><div class="body" id="chatBody" style="min-height:60px">You: hi 👋</div></div>
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="chatInput" style="flex:1;min-width:200px" placeholder="Type a message…" value="Say hello and tell me what you are.">
+      <button class="btn-p" id="chatSend">Send</button>
+      <button class="btn-g" id="chatStop">Stop</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="kv">Temperature <input type="number" id="chatTemp" value="0.7" step="0.1" min="0" max="2" style="width:70px"></label>
+      <label class="kv">Max new tokens <input type="number" id="chatMax" value="120" style="width:80px"></label>
+      <button class="btn-g" id="chatReset" style="margin-left:auto">Reset conversation</button>
+    </div>
+  </div>
+
+  <!-- ── QA panel ── -->
+  <div class="card" id="panel-qa" hidden>
+    <label class="kv">Question</label>
+    <input type="text" id="qaQuestion" style="width:100%" value="Which name is also used to describe the Amazon rainforest in English?">
+    <label class="kv" style="display:block;margin-top:8px">Context</label>
+    <textarea id="qaContext" rows="4">The Amazon rainforest, also known in English as Amazonia or the Amazon Jungle, is a moist broadleaf forest that covers most of the Amazon basin of South America. This basin encompasses 7,000,000 square kilometres, of which 5,500,000 are covered by the rainforest. The majority of the forest is contained within Brazil.</textarea>
+    <button class="btn-p" id="qaBtn" style="margin-top:10px">Answer</button>
+    <div class="out" id="qaOut" hidden><div class="head"><span>Extractive answer</span><span class="kv" id="qaTime"></span></div><div class="body" id="qaBody"></div></div>
+  </div>
+
+  <div class="foot">
+    engine: <code>mini.js v1.0</code> — 100% hand-written HTML/CSS/JS · WebGL2 kernels + CPU fallback ·
+    models by their authors on huggingface.co (Apache-2.0 / MIT) · nothing you type leaves this page
+  </div>
+</div>
+
+<script>
+/*__MINI_ENGINE__*/
+</script>
+
+<script>
+/* ═══════════════════ demo app (vanilla JS) ═══════════════════ */
+(function () {
+'use strict';
+
+const $ = (s) => document.querySelector(s);
+const MODELS = {
+  st:   { repo: 'sentence-transformers/all-MiniLM-L6-v2', task: 'feature-extraction', size: 90852864 },
+  tiny: { repo: 'hf-internal-testing/tiny-random-gpt2',   task: 'text-generation',    size: 500000 },
+  sst2: { repo: 'distilbert/distilbert-base-uncased-finetuned-sst-2-english', task: 'text-classification', size: 268000000 },
+  mlm:  { repo: 'distilbert/distilbert-base-uncased',     task: 'fill-mask',          size: 268000000 },
+  chat: { repo: 'HuggingFaceTB/SmolLM2-135M-Instruct',    task: 'text-generation',    size: 269000000 },
+  chat2:{ repo: 'Qwen/Qwen2.5-0.5B-Instruct',             task: 'text-generation',    size: 988000000 },
+  qa:   { repo: 'distilbert/distilbert-base-uncased-distilled-squad', task: 'question-answering', size: 268000000 },
+};
+const CORPUS = [
+  'The cat sat on the mat and purred softly',
+  'A feline rested comfortably on the rug',
+  'Stock markets rallied after the announcement',
+  'Investors cheered the central bank decision',
+  'The recipe needs two cups of flour',
+  'Bake the cake at 180 degrees for one hour',
+  'The footballer scored a stunning goal',
+  'The match ended in a dramatic penalty shootout',
+];
+
+const Demo = { pipe: null, key: '', corpusVecs: null, MODELS, convo: [], stopFlag: false };
+Demo.CORPUS = CORPUS;
+Demo.runChat = async function* (userMsg, opts) {
+  Demo.convo.push({ role: 'user', content: userMsg });
+  const stream = [];
+  const gen = await Demo.pipe.chat(Demo.convo, {
+    max_new_tokens: opts.max, temperature: opts.temp, do_sample: opts.temp > 0,
+    onText: (delta, full) => stream.push(full),
+  });
+  const reply = gen[0].assistant_message;
+  Demo.convo.push({ role: 'assistant', content: reply });
+  return reply;
+};
+Demo.runQA = async function (question, context) {
+  const t0 = performance.now();
+  const [r] = await Demo.pipe({ question, context });
+  return { answer: r.answer, score: r.score, ms: performance.now() - t0 };
+};
+
+function fmtMB(n) { return (n / 1048576).toFixed(1) + ' MB'; }
+function setStatus(msg, cls) { const el = $('#status'); el.textContent = msg; el.className = 'status' + (cls ? ' ' + cls : ''); }
+
+/* ── model loading with progress ── */
+let fileState = new Map();
+function onProgress(p) {
+  if (p.status === 'initiate') fileState.set(p.file, { l: 0, t: 0 });
+  if (p.status === 'progress' || p.status === 'done' || p.status === 'cached') fileState.set(p.file, { l: p.loaded || 0, t: p.total || 0 });
+  let big = { l: 0, t: 0 };
+  for (const st of fileState.values()) if (st.t > big.t) big = st;
+  const pct = big.t ? Math.min(100, big.l / big.t * 100) : 0;
+  $('#progBar').style.display = 'block';
+  $('#progFill').style.width = pct.toFixed(1) + '%';
+  const cached = [...fileState.values()].some(s => s.t > 0 && s.l >= s.t);
+  $('#progMeta').textContent = (big.t ? fmtMB(big.l) + ' / ' + fmtMB(big.t) + '  (' + pct.toFixed(0) + '%)' : 'connecting…');
+  if (cached) $('#cacheBadge').hidden = false;
+}
+
+Demo.loadSelected = async function () {
+  const m = MODELS[$('#modelSel').value];
+  $('#loadBtn').disabled = true;
+  fileState = new Map();
+  $('#cacheBadge').hidden = true;
+  setStatus('Loading ' + m.repo + ' …');
+  try {
+    const t0 = performance.now();
+    Demo.pipe = await mini.pipeline(m.task, m.repo, { progress_callback: onProgress });
+    Demo.key = $('#modelSel').value;
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    Demo.corpusVecs = null;
+    setStatus('✓ ' + m.repo + ' ready in ' + secs + 's — running 100% in your browser.', 'ok');
+    showPanel(Demo.key);
+  } catch (e) {
+    console.error(e);
+    setStatus('Load failed: ' + (e && e.message), 'err');
+  } finally {
+    $('#loadBtn').disabled = false;
+    $('#progBar').style.display = 'none';
+  }
+};
+
+function showPanel(key) {
+  ['st', 'tiny', 'sst2', 'mlm', 'chat', 'chat2', 'qa'].forEach(k => {
+    const el = document.querySelector('#panel-' + k);
+    if (el) el.hidden = (k !== key);
+  });
+  if (key === 'chat2' && document.querySelector('#panel-chat')) {
+    document.querySelector('#panel-chat').hidden = false; // shared chat panel
+  }
+  if (key === 'st') switchDemo('search');
+}
+
+/* ── helpers ── */
+Demo.cosine = function (a, b) {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-12);
+};
+Demo.embed = async function (text) {
+  if (!Demo.pipe) throw new Error('Load a model first');
+  const t0 = performance.now();
+  const out = await Demo.pipe(text, { pooling: 'mean', normalize: true });
+  return { vec: out.data, ms: performance.now() - t0 };
+};
+Demo.ensureCorpus = async function () {
+  if (Demo.corpusVecs) return Demo.corpusVecs;
+  const vecs = [];
+  let ms = 0;
+  for (const s of CORPUS) { const r = await Demo.embed(s); vecs.push(r.vec); ms += r.ms; }
+  Demo.corpusVecs = { vecs, ms };
+  return Demo.corpusVecs;
+};
+
+/* ── task runners (return data; render to DOM) ── */
+Demo.runSearch = async function (query) {
+  const q = await Demo.embed(query);
+  const { vecs } = await Demo.ensureCorpus();
+  const t0 = performance.now();
+  const scored = CORPUS.map((s, i) => ({ s, score: Demo.cosine(q.vec, vecs[i]) }))
+    .sort((a, b) => b.score - a.score);
+  const rankMs = performance.now() - t0;
+  return { scored, ms: q.ms + rankMs, embedMs: q.ms, corpusMs: Demo.corpusVecs.ms };
+};
+Demo.runSimilarity = async function (a, b) {
+  const [ra, rb] = [await Demo.embed(a), await Demo.embed(b)];
+  return { score: Demo.cosine(ra.vec, rb.vec), ms: ra.ms + rb.ms };
+};
+Demo.runGenerate = async function (prompt, n, onToken) {
+  const t0 = performance.now();
+  const [out] = await Demo.pipe(prompt, { max_new_tokens: n, do_sample: false, onToken });
+  return { text: out.generated_text, ms: performance.now() - t0, n };
+};
+Demo.runClassify = async function (text) {
+  const t0 = performance.now();
+  return { results: await Demo.pipe(text), ms: performance.now() - t0 };
+};
+Demo.runFillMask = async function (text) {
+  const t0 = performance.now();
+  return { results: await Demo.pipe(text, { top_k: 5 }), ms: performance.now() - t0 };
+};
+
+/* ── rendering ── */
+function bars(container, items, labelFn) {
+  container.innerHTML = '';
+  for (const it of items) {
+    const row = document.createElement('div'); row.className = 'srow';
+    const lab = document.createElement('div'); lab.className = 'slabel'; lab.textContent = labelFn(it); lab.title = labelFn(it);
+    const track = document.createElement('div'); track.className = 'strack';
+    const fill = document.createElement('div'); fill.className = 'sfill';
+    fill.style.width = (Math.max(0, it.score) * 100).toFixed(1) + '%';
+    fill.textContent = (it.score * 100).toFixed(1) + '%';
+    track.appendChild(fill); row.appendChild(lab); row.appendChild(track); container.appendChild(row);
+  }
+}
+
+/* ── wiring ── */
+function switchDemo(name) {
+  document.querySelectorAll('#panel-st .tab').forEach(t => t.classList.toggle('on', t.dataset.demo === name));
+  $('#demo-search').hidden = name !== 'search';
+  $('#demo-sim').hidden = name !== 'sim';
+  $('#demo-embed').hidden = name !== 'embed';
+}
+
+function guard(fn) {
+  return async () => {
+    try { await fn(); }
+    catch (e) { console.error(e); setStatus('Error: ' + (e && e.message), 'err'); }
+  };
+}
+
+function wire() {
+  $('#loadBtn').addEventListener('click', () => Demo.loadSelected());
+  document.querySelectorAll('#panel-st .tab').forEach(t =>
+    t.addEventListener('click', () => switchDemo(t.dataset.demo)));
+
+  $('#searchBtn').addEventListener('click', guard(async () => {
+    $('#searchOut').hidden = false;
+    $('#searchBody').textContent = 'Embedding…';
+    const r = await Demo.runSearch($('#searchQuery').value);
+    $('#searchBody').innerHTML = '';
+    const wrap = document.createElement('div');
+    $('#searchBody').appendChild(wrap);
+    bars(wrap, r.scored, it => it.s);
+    $('#searchTime').textContent = r.embedMs.toFixed(0) + ' ms embed + ' + r.ms.toFixed(1) + ' ms rank';
+    setStatus('Done — computed locally. ✔', 'ok');
+  }));
+
+  $('#simBtn').addEventListener('click', guard(async () => {
+    $('#simOut').hidden = false;
+    $('#simBody').textContent = 'Comparing…';
+    const r = await Demo.runSimilarity($('#simA').value, $('#simB').value);
+    $('#simBody').innerHTML = '';
+    const wrap = document.createElement('div'); $('#simBody').appendChild(wrap);
+    bars(wrap, [{ score: Math.max(0, r.score) }], () => 'cosine');
+    const kv = document.createElement('div'); kv.className = 'kv';
+    kv.textContent = 'similarity = ' + r.score.toFixed(4) + '  (1 = same meaning, 0 = unrelated)';
+    $('#simBody').appendChild(kv);
+    $('#simTime').textContent = r.ms.toFixed(0) + ' ms for 2 sentences';
+    setStatus('Done — computed locally. ✔', 'ok');
+  }));
+
+  $('#embedBtn').addEventListener('click', guard(async () => {
+    $('#embedOut').hidden = false;
+    $('#embedBody').textContent = 'Embedding…';
+    const r = await Demo.embed($('#embedText').value);
+    const v = r.vec;
+    $('#embedBody').innerHTML = '';
+    const chart = document.createElement('div'); chart.className = 'vec';
+    let maxAbs = 1e-9; for (let i = 0; i < Math.min(64, v.length); i++) maxAbs = Math.max(maxAbs, Math.abs(v[i]));
+    for (let i = 0; i < Math.min(64, v.length); i++) {
+      const b = document.createElement('i');
+      b.style.height = Math.max(3, Math.abs(v[i]) / maxAbs * 64) + 'px';
+      b.style.background = v[i] >= 0 ? '#14e0c0' : '#ff5c8a';
+      b.title = 'dim ' + i + ' = ' + v[i].toFixed(4);
+      chart.appendChild(b);
+    }
+    $('#embedBody').appendChild(chart);
+    let norm = 0; for (const x of v) norm += x * x;
+    const kv = document.createElement('div'); kv.className = 'kv';
+    kv.textContent = 'dims: ' + v.length + ' · L2 norm: ' + Math.sqrt(norm).toFixed(4) + ' · ' + r.ms.toFixed(0) + ' ms';
+    $('#embedBody').appendChild(kv);
+    $('#embedTime').textContent = r.ms.toFixed(0) + ' ms';
+    setStatus('Done — computed locally. ✔', 'ok');
+  }));
+
+  $('#genBtn').addEventListener('click', guard(async () => {
+    $('#genOut').hidden = false;
+    const prompt = $('#genPrompt').value;
+    const n = parseInt($('#genN').value, 10) || 24;
+    $('#genBody').textContent = prompt;
+    const cur = document.createElement('span'); cur.className = 'cursor'; $('#genBody').appendChild(cur);
+    const promptIds = Demo.pipe.tokenizer.encode(prompt);
+    const ids = [];
+    const r = await Demo.runGenerate(prompt, n, (id) => {
+      ids.push(id);
+      $('#genBody').textContent = Demo.pipe.tokenizer.decode(promptIds.concat(ids), { skipSpecialTokens: true });
+      $('#genBody').appendChild(cur);
+    });
+    $('#genBody').textContent = r.text;
+    $('#genTime').textContent = n + ' tokens · ' + (r.ms / 1000).toFixed(1) + 's · ' + (n / (r.ms / 1000)).toFixed(1) + ' tok/s';
+    setStatus('Done — computed locally. ✔', 'ok');
+  }));
+
+  $('#clsBtn').addEventListener('click', guard(async () => {
+    $('#clsOut').hidden = false;
+    $('#clsBody').textContent = 'Classifying…';
+    const r = await Demo.runClassify($('#clsText').value);
+    $('#clsBody').innerHTML = '';
+    const wrap = document.createElement('div'); $('#clsBody').appendChild(wrap);
+    bars(wrap, r.results.slice(0, 5), it => it.label);
+    $('#clsTime').textContent = r.ms.toFixed(0) + ' ms';
+    setStatus('Done — computed locally. ✔', 'ok');
+  }));
+
+  $('#mlmBtn').addEventListener('click', guard(async () => {
+    $('#mlmOut').hidden = false;
+    $('#mlmBody').textContent = 'Predicting…';
+    const r = await Demo.runFillMask($('#mlmText').value);
+    $('#mlmBody').innerHTML = '';
+    const wrap = document.createElement('div'); $('#mlmBody').appendChild(wrap);
+    bars(wrap, r.results, it => it.token);
+    const kv = document.createElement('div'); kv.className = 'kv';
+    kv.textContent = 'best sentence: ' + (r.results[0] ? r.results[0].sequence : '—');
+    $('#mlmBody').appendChild(kv);
+    $('#mlmTime').textContent = r.ms.toFixed(0) + ' ms';
+    setStatus('Done — computed locally. ✔', 'ok');
+  }));
+
+  // ── chat ──
+  let chatTranscript = '';
+  $('#chatSend').addEventListener('click', guard(async () => {
+    const input = $('#chatInput');
+    const msg = input.value.trim();
+    if (!msg || !Demo.pipe) return;
+    input.value = '';
+    const body = $('#chatBody');
+    chatTranscript += (chatTranscript ? '\n\n' : '') + 'You: ' + msg + '\n\nAssistant: ';
+    body.textContent = chatTranscript;
+    const cur = document.createElement('span'); cur.className = 'cursor'; body.appendChild(cur);
+    Demo.stopFlag = false;
+    let shown = chatTranscript.length;
+    let nTokens = 0;
+    const t0 = performance.now();
+    const convo = Demo.convo.concat([{ role: 'user', content: msg }]);
+    let full = '';
+    const result = await Demo.pipe.chat(convo, {
+      max_new_tokens: parseInt($('#chatMax').value, 10) || 120,
+      temperature: parseFloat($('#chatTemp').value) || 0.7,
+      onText: (delta, fullText) => {
+        if (Demo.stopFlag) return false;
+        nTokens++;
+        full = fullText;
+        body.textContent = chatTranscript + fullText;
+        body.appendChild(cur);
+      },
+    });
+    cur.remove();
+    const reply = result[0].assistant_message;
+    Demo.convo = convo.concat([{ role: 'assistant', content: reply }]);
+    chatTranscript = chatTranscript + reply;
+    body.textContent = chatTranscript;
+    const secs = (performance.now() - t0) / 1000;
+    setStatus('Done — ' + nTokens + ' tokens · ' + secs.toFixed(1) + 's · ' + (nTokens / Math.max(secs, .001)).toFixed(1) + ' tok/s. ✔', 'ok');
+  }));
+  $('#chatStop').addEventListener('click', () => { Demo.stopFlag = true; });
+  $('#chatReset').addEventListener('click', () => { Demo.convo = []; chatTranscript = ''; $('#chatBody').textContent = ''; });
+
+  // ── question answering ──
+  $('#qaBtn').addEventListener('click', guard(async () => {
+    $('#qaOut').hidden = false;
+    $('#qaBody').textContent = 'Reading the passage…';
+    const r = await Demo.runQA($('#qaQuestion').value, $('#qaContext').value);
+    $('#qaBody').innerHTML = '';
+    const ans = document.createElement('div');
+    ans.style.fontWeight = '700'; ans.style.fontSize = '16px';
+    ans.textContent = r.answer || '(no answer found)';
+    const kv = document.createElement('div'); kv.className = 'kv';
+    kv.textContent = 'confidence: ' + (r.score * 100).toFixed(1) + '%';
+    $('#qaBody').appendChild(ans); $('#qaBody').appendChild(kv);
+    $('#qaTime').textContent = r.ms.toFixed(0) + ' ms';
+    setStatus('Done — computed locally. ✔', 'ok');
+  }));
+
+  $('#corpusList').textContent = CORPUS.map((s, i) => (i + 1) + '. ' + s).join('\n');
+}
+
+/* ── boot ── */
+async function boot() {
+  const params = new URLSearchParams(location.search);
+  if (params.get('hub')) mini.env.hfBase = params.get('hub');        // self-host / test override
+  if (params.get('cache')) mini.env.cacheName = params.get('cache'); // isolated cache for tests
+  const badge = $('#backendBadge');
+  try {
+    const b = mini.initBackend();
+    badge.textContent = b === 'webgl' ? '⚡ WebGL2 GPU — kernels self-test passed' : '🖥 CPU fallback';
+    badge.classList.add('good');
+  } catch (e) {
+    badge.textContent = '⚠ backend error';
+    badge.classList.add('good');
+  }
+  wire();
+}
+Demo.boot = boot;
+
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+}
+
+if (typeof window !== 'undefined') window.Demo = Demo;
+})();
+</script>
+</body>
+</html>

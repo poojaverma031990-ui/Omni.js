@@ -1,364 +1,298 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Omni.js - 100% Pure Scratch AI Engine</title>
-  <style>
-    :root {
-      --bg: #090a0f;
-      --card-bg: rgba(255, 255, 255, 0.04);
-      --card-border: rgba(255, 255, 255, 0.08);
-      --glass-glow: rgba(120, 119, 198, 0.15);
-      --primary: #6366f1;
-      --primary-hover: #4f46e5;
-      --text: #f3f4f6;
-      --text-muted: #9ca3af;
-      --accent-cyan: #06b6d4;
-      --accent-green: #10b981;
-    }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, sans-serif;
-      -webkit-font-smoothing: antialiased;
-    }
-
-    body {
-      background-color: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 30px 20px;
-      overflow-x: hidden;
-      background-image: 
-        radial-gradient(circle at 15% 10%, var(--glass-glow) 0%, transparent 40%),
-        radial-gradient(circle at 85% 90%, rgba(6, 182, 212, 0.1) 0%, transparent 40%);
-    }
-
-    .header-badge {
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 2px;
-      background: rgba(99, 102, 241, 0.15);
-      border: 1px solid rgba(99, 102, 241, 0.3);
-      padding: 6px 14px;
-      border-radius: 9999px;
-      color: #a5b4fc;
-      margin-bottom: 12px;
-    }
-
-    h1 {
-      font-size: 2.5rem;
-      font-weight: 700;
-      letter-spacing: -0.03em;
-      margin-bottom: 8px;
-      background: linear-gradient(180deg, #ffffff 0%, #a1a1aa 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-
-    .subtitle {
-      font-size: 0.95rem;
-      color: var(--text-muted);
-      margin-bottom: 30px;
-      text-align: center;
-      max-width: 600px;
-    }
-
-    .container {
-      width: 100%;
-      max-width: 950px;
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 20px;
-    }
-
-    .card {
-      background: var(--card-bg);
-      backdrop-filter: blur(25px);
-      -webkit-backdrop-filter: blur(25px);
-      border: 1px solid var(--card-border);
-      border-radius: 20px;
-      padding: 24px;
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
-    }
-
-    .model-loader-bar {
-      display: flex;
-      gap: 12px;
-      margin-bottom: 16px;
-    }
-
-    input[type="text"] {
-      flex: 1;
-      background: rgba(0, 0, 0, 0.3);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 12px;
-      padding: 12px 16px;
-      color: white;
-      font-size: 0.9rem;
-      outline: none;
-      transition: border-color 0.2s;
-    }
-
-    input[type="text"]:focus {
-      border-color: var(--primary);
-    }
-
-    button {
-      background: var(--primary);
-      color: white;
-      border: none;
-      border-radius: 12px;
-      padding: 12px 22px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    button:hover {
-      background: var(--primary-hover);
-      transform: translateY(-1px);
-    }
-
-    .btn-secondary {
-      background: rgba(255, 255, 255, 0.07);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-    }
-
-    .btn-secondary:hover {
-      background: rgba(255, 255, 255, 0.12);
-    }
-
-    .dropzone {
-      border: 2px dashed rgba(255, 255, 255, 0.15);
-      border-radius: 14px;
-      padding: 20px;
-      text-align: center;
-      color: var(--text-muted);
-      cursor: pointer;
-      transition: border-color 0.2s;
-      font-size: 0.85rem;
-    }
-
-    .dropzone:hover {
-      border-color: var(--primary);
-    }
-
-    .chat-box {
-      height: 280px;
-      background: rgba(0, 0, 0, 0.4);
-      border-radius: 14px;
-      padding: 18px;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      font-size: 0.9rem;
-      border: 1px solid rgba(255, 255, 255, 0.05);
-    }
-
-    .msg-user {
-      align-self: flex-end;
-      background: #4338ca;
-      color: white;
-      padding: 10px 16px;
-      border-radius: 14px 14px 2px 14px;
-      max-width: 75%;
-    }
-
-    .msg-ai {
-      align-self: flex-start;
-      background: rgba(255, 255, 255, 0.08);
-      color: #e5e7eb;
-      padding: 10px 16px;
-      border-radius: 14px 14px 14px 2px;
-      max-width: 75%;
-      white-space: pre-wrap;
-    }
-
-    .console-box {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 0.75rem;
-      background: #040508;
-      color: #34d399;
-      padding: 14px;
-      border-radius: 12px;
-      max-height: 120px;
-      overflow-y: auto;
-      line-height: 1.5;
-      border: 1px solid rgba(255, 255, 255, 0.05);
-    }
-
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 0.75rem;
-      color: var(--accent-green);
-    }
-
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      background: var(--accent-green);
-      border-radius: 50%;
-      box-shadow: 0 0 8px var(--accent-green);
-    }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>mini.js — Run AI in your browser with one line of code</title>
+<meta name="description" content="mini.js is a Transformers.js alternative written 100% from scratch in pure HTML/CSS/JS. Zero dependencies, no ONNX, no WebAssembly. GPT-2, BERT and more — right in your browser.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-  <div class="header-badge">100% Pure JS Engine • Zero External Libraries</div>
-  <h1>omni.js Universal Runtime</h1>
-  <p class="subtitle">Hand-crafted Protobuf parser, GGUF reader, Byte-Level BPE tokenizer, and WebGPU tensor execution graph from scratch.</p>
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="logo" href="#top">mini<span>.js</span></a>
+    <div class="nav-links">
+      <a href="#playground">Playground</a>
+      <a href="#add">Get started</a>
+      <a href="#code">One-line API</a>
+      <a href="#how">How it works</a>
+      <a href="#models">Models</a>
+    </div>
+    <div class="badge backend-badge" id="backendBadge">checking backend…</div>
+  </div>
+</nav>
 
+<header class="hero" id="top">
+  <div class="hero-bg" aria-hidden="true"></div>
   <div class="container">
-    <!-- Model Connection Card -->
-    <div class="card">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-        <span style="font-weight: 600; font-size: 0.95rem;">Model Source</span>
-        <div class="status-badge" id="engineStatus"><div class="status-dot"></div> WebGPU Active</div>
-      </div>
+    <div class="pill">100% from scratch · zero dependencies · no ONNX · no WebAssembly</div>
+    <h1>Run real AI models in your browser.<br><span class="grad">One line of code.</span></h1>
+    <p class="sub">mini.js is a Transformers.js alternative built entirely from scratch in pure HTML, CSS and JavaScript —
+       its own WebGL2 kernels, tensor engine, tokenizers, safetensors parser and model runtime.
+       Anyone in the world can use it with a single <code>&lt;script&gt;</code> tag.</p>
 
-      <div class="model-loader-bar">
-        <input type="text" id="modelInput" value="Xenova/gpt2" placeholder="HuggingFace ID or Raw URL">
-        <button id="loadHfBtn">Load Model</button>
-        <button id="loadTestBtn" class="btn-secondary">Test Tiny Model</button>
+    <div class="install-box">
+      <div class="install-row">
+        <code>&lt;script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@main/mini.js"&gt;&lt;/script&gt;</code>
+        <button class="copy-btn" data-copy='<script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@main/mini.js"></script>'>Copy</button>
       </div>
-
-      <div class="dropzone" id="dropArea">
-        Drag & Drop your <b>.onnx</b> or <b>.gguf</b> files directly into the engine
-      </div>
+      <pre class="install-code">const llm = await mini.pipeline('text-generation', 'HuggingFaceTB/SmolLM2-135M-Instruct');
+const [out] = await llm.chat('Explain gravity simply.');
+console.log(out.assistant_message);</pre>
     </div>
 
-    <!-- Playground Card -->
-    <div class="card">
-      <div style="font-weight: 600; font-size: 0.95rem; margin-bottom: 14px;">Inference Playground</div>
-      <div class="chat-box" id="chatBox">
-        <div class="msg-ai">Engine initialized. Load a model from Hugging Face or click "Test Tiny Model" to evaluate the full forward execution pipeline immediately without downloading!</div>
-      </div>
-
-      <div style="display: flex; gap: 10px; margin-top: 14px;">
-        <input type="text" id="promptInput" placeholder="Enter a prompt (e.g., 'The universe is')...">
-        <button id="generateBtn">Generate</button>
-      </div>
+    <div class="hero-ctas">
+      <a class="btn btn-primary" href="#playground">▶ Open the playground</a>
+      <a class="btn btn-ghost" href="#code">See the one-line API</a>
     </div>
 
-    <!-- Live Execution Logs -->
-    <div class="card">
-      <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 8px; color: var(--text-muted);">
-        Hardware Pipeline Logs
+    <div class="stats">
+      <div class="stat"><b>0</b><span>dependencies</span></div>
+      <div class="stat"><b>~110 KB</b><span>engine, pure JS</span></div>
+      <div class="stat"><b>6</b><span>AI tasks</span></div>
+      <div class="stat"><b>GPU+CPU</b><span>WebGL2 &amp; fallback</span></div>
+      <div class="stat"><b>100%</b><span>on-device &amp; private</span></div>
+    </div>
+  </div>
+</header>
+
+<!-- ═══════════════════════ ADD TO YOUR SITE ═══════════════════════ -->
+<section class="section alt" id="add">
+  <div class="container">
+    <h2>Add it to any site in 30 seconds</h2>
+    <p class="section-sub">One <code>&lt;script&gt;</code> tag — from GitHub Pages or jsDelivr, your choice. No npm, no build step, no keys. Works on plain HTML pages, React/Vue/Svelte apps, Web Workers (<code>importScripts</code>), and even <code>file://</code>.</p>
+
+    <div class="install-box" style="max-width:none">
+      <div class="install-row">
+        <code>&lt;script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@main/mini.js"&gt;&lt;/script&gt;</code>
+        <button class="copy-btn" data-copy='<script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@main/mini.js"></script>'>Copy the one-liner</button>
       </div>
-      <div class="console-box" id="consoleOutput">
-        [Omni Engine] Initialized in pure JavaScript.<br>
+      <pre class="install-code">&lt;!-- GitHub Pages (this site) --&gt;
+&lt;script src="https://poojaverma031990-ui.github.io/Omni.js/mini.js"&gt;&lt;/script&gt;
+
+&lt;!-- or jsDelivr CDN (pinned to v2.0.0) --&gt;
+&lt;script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@v2.0.0/mini.js"&gt;&lt;/script&gt;</pre>
+    </div>
+
+    <div class="code-grid">
+      <div class="code-card">
+        <h3>💬 Chat with an LLM</h3>
+        <pre><code>const llm = await mini.pipeline(
+  'text-generation', 'HuggingFaceTB/SmolLM2-135M-Instruct');
+const [r] = await llm.chat('Hi!');
+console.log(r.assistant_message);</code></pre>
+        <button class="copy-btn" data-copy="const llm = await mini.pipeline('text-generation', 'HuggingFaceTB/SmolLM2-135M-Instruct');
+const [r] = await llm.chat('Hi!');
+console.log(r.assistant_message);">Copy</button>
+      </div>
+      <div class="code-card">
+        <h3>🎭 Sentiment</h3>
+        <pre><code>const cls = await mini.pipeline('text-classification',
+  'distilbert/distilbert-base-uncased-finetuned-sst-2-english');
+const [top] = await cls('I love this!');
+// → { label: 'POSITIVE', score: 0.999 }</code></pre>
+        <button class="copy-btn" data-copy="const cls = await mini.pipeline('text-classification', 'distilbert/distilbert-base-uncased-finetuned-sst-2-english');
+const [top] = await cls('I love this!');
+console.log(top);">Copy</button>
+      </div>
+      <div class="code-card">
+        <h3>🧭 Embeddings</h3>
+        <pre><code>const vec = await mini.embed('Hello world');
+// → Float32Array(384), unit length</code></pre>
+        <button class="copy-btn" data-copy="const vec = await mini.embed('Hello world');
+console.log(vec);">Copy</button>
+      </div>
+      <div class="code-card">
+        <h3>❓ Question answering</h3>
+        <pre><code>const qa = await mini.pipeline('question-answering',
+  'distilbert/distilbert-base-uncased-distilled-squad');
+const [a] = await qa({ question: 'Who?',
+  context: 'Ada Lovelace wrote the first algorithm.' });</code></pre>
+        <button class="copy-btn" data-copy="const qa = await mini.pipeline('question-answering', 'distilbert/distilbert-base-uncased-distilled-squad');
+const [a] = await qa({ question: 'Who?', context: 'Ada Lovelace wrote the first algorithm.' });
+console.log(a.answer);">Copy</button>
+      </div>
+    </div>
+    <p class="section-sub" style="margin-top:18px">That's the whole integration. Models stream from huggingface.co (CORS-enabled), cache in the user's browser, and then run 100% on-device — your servers never see a byte of user data.</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ PLAYGROUND ═══════════════════════ -->
+<section class="section" id="playground">
+  <div class="container">
+    <h2>Playground <span class="muted">— one click, runs on your device</span></h2>
+    <p class="section-sub">Pick a task, press Run. Models stream straight from the Hugging Face Hub into your browser cache and execute locally. Nothing is sent to any server.</p>
+
+    <div class="playground card">
+      <div class="tabs" id="taskTabs">
+        <button class="tab active" data-task="text-generation">✍️ Text generation</button>
+        <button class="tab" data-task="text-classification">🎭 Sentiment</button>
+        <button class="tab" data-task="feature-extraction">🧭 Embeddings</button>
+        <button class="tab" data-task="fill-mask">🕳 Fill mask</button>
+        <button class="tab" data-task="chat">💬 Chat (LLMs)</button>
+        <button class="tab" data-task="question-answering">❓ Question answering</button>
+      </div>
+
+      <div class="controls">
+        <label class="field grow">
+          <span>Model</span>
+          <select id="modelSelect"></select>
+        </label>
+        <label class="field" id="maxTokField">
+          <span>New tokens</span>
+          <input type="number" id="maxTokens" value="40" min="1" max="200">
+        </label>
+        <label class="field" id="tempField">
+          <span>Temperature</span>
+          <input type="number" id="temperature" value="0.8" min="0" max="2" step="0.1">
+        </label>
+        <label class="field check-field" id="sampleField">
+          <span>Sampling</span>
+          <input type="checkbox" id="doSample" checked>
+        </label>
+      </div>
+
+      <label class="field">
+        <span id="inputLabel">Prompt</span>
+        <textarea id="inputText" rows="3" spellcheck="false"></textarea>
+      </label>
+
+      <div class="run-row">
+        <button class="btn btn-primary" id="runBtn">▶ Run</button>
+        <button class="btn btn-ghost" id="sampleBtn">Try a sample</button>
+        <div class="status" id="status">Ready.</div>
+      </div>
+
+      <div class="progress-wrap" id="progressWrap" hidden>
+        <div class="progress-title" id="progressTitle">Downloading model…</div>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-meta" id="progressMeta"></div>
+      </div>
+
+      <div class="output" id="outputArea" hidden>
+        <div class="output-head">
+          <span id="outputTitle">Output</span>
+          <div>
+            <span class="badge" id="timingBadge"></span>
+            <button class="copy-btn" id="copyOut">Copy</button>
+          </div>
+        </div>
+        <div class="output-body" id="outputBody"></div>
       </div>
     </div>
   </div>
+</section>
 
-  <script src="omni.js"></script>
-  <script>
-    let activeModel = null;
-    const logEl = document.getElementById("consoleOutput");
-    const chatBox = document.getElementById("chatBox");
+<!-- ═══════════════════════ ONE-LINE API ═══════════════════════ -->
+<section class="section alt" id="code">
+  <div class="container">
+    <h2>The one-line API</h2>
+    <p class="section-sub">Every task is a single await. First call downloads &amp; caches the model — after that it's instant and works offline.</p>
+    <div class="code-grid">
+      <div class="code-card">
+        <h3>✍️ Generate text</h3>
+        <pre><code>const text = await mini.generate(
+  'Once upon a time'
+);</code></pre>
+        <button class="copy-btn" data-copy="const text = await mini.generate('Once upon a time');">Copy</button>
+      </div>
+      <div class="code-card">
+        <h3>🎭 Classify text</h3>
+        <pre><code>const [top] = await mini.classify(
+  'I absolutely love this!'
+);
+// → { label: 'POSITIVE', score: 0.999 }</code></pre>
+        <button class="copy-btn" data-copy="const [top] = await mini.classify('I absolutely love this!');">Copy</button>
+      </div>
+      <div class="code-card">
+        <h3>🧭 Embed text</h3>
+        <pre><code>const vector = await mini.embed(
+  'Hello world'
+);
+// → Float32Array(384), unit length</code></pre>
+        <button class="copy-btn" data-copy="const vector = await mini.embed('Hello world');">Copy</button>
+      </div>
+      <div class="code-card">
+        <h3>🕳 Fill the mask</h3>
+        <pre><code>const [best] = await mini.fillMask(
+  'Paris is the [MASK] of France.'
+);
+// → { token: 'capital', score: … }</code></pre>
+        <button class="copy-btn" data-copy="const [best] = await mini.fillMask('Paris is the [MASK] of France.');">Copy</button>
+      </div>
+      <div class="code-card wide">
+        <h3>⚙️ Full control</h3>
+        <pre><code>const gen = await mini.pipeline('text-generation', 'openai-community/gpt2', {
+  progress_callback: (p) => console.log(p.status, p.file, p.progress)
+});
+const [out] = await gen('Once upon a time', {
+  max_new_tokens: 100,      // length
+  do_sample: true,          // sampling on/off
+  temperature: 0.8,         // creativity
+  top_k: 50, top_p: 0.95,   // sampling strategies
+  repetition_penalty: 1.1,  // discourage loops
+  onToken: (id, n) => console.log('token', n)  // streaming
+});</code></pre>
+        <button class="copy-btn" data-copy="const gen = await mini.pipeline('text-generation', 'openai-community/gpt2');">Copy</button>
+      </div>
+    </div>
+  </div>
+</section>
 
-    function log(msg) {
-      logEl.innerHTML += `<div>&gt; ${msg}</div>`;
-      logEl.scrollTop = logEl.scrollHeight;
-    }
+<!-- ═══════════════════════ HOW IT WORKS ═══════════════════════ -->
+<section class="section" id="how">
+  <div class="container">
+    <h2>How it works <span class="muted">— every line hand-written</span></h2>
+    <p class="section-sub">There is no ONNX Runtime here. No TensorFlow.js. No WebAssembly blobs. No native code.
+      Each layer of the stack was built from nothing, in plain JavaScript.</p>
+    <div class="feature-grid">
+      <div class="feature"><div class="ico">🧮</div><h3>Tensor engine</h3><p>An eager tensor class with two complete backends: blocked, unrolled Float32Array kernels for the CPU and RGBA32F texture kernels for the GPU.</p></div>
+      <div class="feature"><div class="ico">✨</div><h3>Hand-written GLSL</h3><p>Matmul (3 layouts), softmax, layernorm, GELU, embedding gathers, slicing and scatter — raw GLSL ES 3.00 fragment shaders over WebGL2 framebuffers.</p></div>
+      <div class="feature"><div class="ico">🔤</div><h3>Tokenizers from scratch</h3><p>Byte-level BPE (the GPT-2 byte↔unicode trick, merge ranks, pre-tokenizer regex) and WordPiece (greedy longest-match, ## prefixes) — parsing real <code>tokenizer.json</code>.</p></div>
+      <div class="feature"><div class="ico">📦</div><h3>safetensors parser</h3><p>Reads the safetensors binary format directly: JSON header + raw buffers, with F16 / BF16 / F32 decoding via bit manipulation.</p></div>
+      <div class="feature"><div class="ico">🤖</div><h3>Real transformers</h3><p>GPT-2 decoder with KV-cache and causal attention, BERT and DistilBERT encoders — attention heads, residuals, layer norms, all as explicit tensor ops.</p></div>
+      <div class="feature"><div class="ico">🎲</div><h3>Sampling engine</h3><p>Greedy, temperature, top-k, top-p (nucleus) and repetition penalty — the same toolbox the big libraries have.</p></div>
+      <div class="feature"><div class="ico">🌐</div><h3>Hub streaming + cache</h3><p>Streams model files from the Hugging Face Hub with progress callbacks and caches them in the browser, so the second run is instant and offline.</p></div>
+      <div class="feature"><div class="ico">🛡</div><h3>GPU self-test</h3><p>On load, every GPU kernel is verified against the CPU reference on known inputs. If anything is off, mini.js silently switches to CPU. Correctness first.</p></div>
+    </div>
+  </div>
+</section>
 
-    function appendMessage(role, text) {
-      const msg = document.createElement("div");
-      msg.className = role === "user" ? "msg-user" : "msg-ai";
-      msg.innerText = text;
-      chatBox.appendChild(msg);
-      chatBox.scrollTop = chatBox.scrollHeight;
-      return msg;
-    }
+<!-- ═══════════════════════ MODELS ═══════════════════════ -->
+<section class="section alt" id="models">
+  <div class="container">
+    <h2>Models that work today</h2>
+    <p class="section-sub">Any Hugging Face repo in these families with <code>model.safetensors</code> + <code>tokenizer.json</code> works — just pass the repo id.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Model</th><th>Task</th><th>Download</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><code>openai-community/gpt2</code></td><td>text-generation</td><td>~548 MB (fp32)</td><td>The classic 124M GPT-2</td></tr>
+          <tr><td><code>distilbert/distilbert-base-uncased-finetuned-sst-2-english</code></td><td>text-classification</td><td>~268 MB</td><td>SST-2 sentiment</td></tr>
+          <tr><td><code>sentence-transformers/all-MiniLM-L6-v2</code></td><td>feature-extraction</td><td>~90 MB</td><td>384-dim sentence embeddings</td></tr>
+          <tr><td><code>distilbert/distilbert-base-uncased</code></td><td>fill-mask</td><td>~268 MB</td><td>Masked language model</td></tr>
+          <tr><td><code>hf-internal-testing/tiny-random-gpt2</code></td><td>text-generation</td><td>&lt;1 MB</td><td>Instant smoke test</td></tr>
+          <tr><td><code>google-bert/bert-base-uncased</code></td><td>fill-mask / embeddings</td><td>~440 MB</td><td>BERT base</td></tr>
+          <tr><td><code>HuggingFaceTB/SmolLM2-135M-Instruct</code></td><td>chat (Llama arch)</td><td>~269 MB (BF16)</td><td>Real instruct LLM — RMSNorm+RoPE+GQA</td></tr>
+          <tr><td><code>Qwen/Qwen2.5-0.5B-Instruct</code></td><td>chat (Qwen2 arch)</td><td>~988 MB (BF16)</td><td>Larger LLM chat, same engine</td></tr>
+          <tr><td><code>distilbert/distilbert-base-uncased-distilled-squad</code></td><td>question-answering</td><td>~268 MB</td><td>Extractive QA (SQuAD)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
 
-    // Instant Tiny Model Test
-    document.getElementById("loadTestBtn").onclick = () => {
-      log("Spinning up scratch memory graph for Tiny 2-layer Transformer...");
-      activeModel = Omni.createTinyTestModel();
-      log("Tiny model generated. Handcrafted Gather -> GELU -> MatMul nodes ready.");
-      appendMessage("ai", "Instant Tiny model loaded! MatMul & GELU kernels are compiled and ready to generate.");
-    };
+<footer class="footer">
+  <div class="container">
+    <div class="footer-brand">mini<span>.js</span></div>
+    <p>Written from scratch in pure HTML + CSS + JS. No dependencies. MIT licensed.</p>
+    <p class="muted small">Runs entirely on your device — prompts never leave your browser. Models are downloaded from huggingface.co and cached locally.</p>
+  </div>
+</footer>
 
-    // HuggingFace / URL Loading
-    document.getElementById("loadHfBtn").onclick = async () => {
-      const target = document.getElementById("modelInput").value.trim();
-      log(`Starting universal resolution for: ${target}`);
-      try {
-        activeModel = await Omni.load(target, (p) => log(p));
-        appendMessage("ai", `Successfully parsed and loaded ${target} into custom memory map!`);
-      } catch (err) {
-        log(`Error loading model: ${err.message}`);
-        console.error(err);
-      }
-    };
-
-    // File Drag & Drop
-    const dropArea = document.getElementById("dropArea");
-    ["dragenter", "dragover"].forEach(event => {
-      dropArea.addEventListener(event, (e) => { e.preventDefault(); dropArea.style.borderColor = "#6366f1"; });
-    });
-    ["dragleave", "drop"].forEach(event => {
-      dropArea.addEventListener(event, (e) => { e.preventDefault(); dropArea.style.borderColor = "rgba(255, 255, 255, 0.15)"; });
-    });
-    dropArea.addEventListener("drop", async (e) => {
-      const file = e.dataTransfer.files[0];
-      if (!file) return;
-
-      log(`Reading local binary file: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)...`);
-      const buffer = await file.arrayBuffer();
-
-      activeModel = new MyTransformer();
-      if (file.name.endsWith(".onnx")) {
-        activeModel.loadFromONNX(buffer, null);
-        log("ONNX binary parsed via hand-crafted Protobuf reader.");
-      } else if (file.name.endsWith(".gguf")) {
-        activeModel.loadFromGGUF(buffer);
-        log("GGUF binary parsed via hand-crafted GGUF header extractor.");
-      }
-      appendMessage("ai", `Loaded file: ${file.name}`);
-    });
-
-    // Generation Loop
-    document.getElementById("generateBtn").onclick = async () => {
-      const prompt = document.getElementById("promptInput").value.trim();
-      if (!prompt) return;
-      if (!activeModel) {
-        alert("Please load a model or click 'Test Tiny Model' first!");
-        return;
-      }
-
-      appendMessage("user", prompt);
-      document.getElementById("promptInput").value = "";
-
-      const aiMsg = appendMessage("ai", "");
-      log(`Generating tokens for prompt: "${prompt}"...`);
-
-      const startTime = performance.now();
-      let generatedCount = 0;
-
-      await activeModel.generate(prompt, 15, (tokenStr, id) => {
-        aiMsg.innerText += tokenStr;
-        generatedCount++;
-      }, (nodeName, op) => {
-        log(`Executing Op: [${op}] on ${nodeName}`);
-      });
-
-      const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
-      log(`Completed ${generatedCount} tokens in ${elapsed}s (${(generatedCount / elapsed).toFixed(1)} tok/s).`);
-    };
-  </script>
+<script src="mini.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
