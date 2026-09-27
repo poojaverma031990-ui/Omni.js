@@ -89,7 +89,7 @@ for (const f of ORDER) {
     if (allDefined.has(name)) throw new Error(`top-level name collision: "${name}" defined in ${allDefined.get(name)} and ${file}`);
     allDefined.set(name, file);
   }
-  parts.push(`// ───────────────────────────── src/${file} ─────────────────────────────\n${code}`);
+  parts.push(`// ───────────────────────────── src/${file} ──────────────────────────\n${code}`);
 }
 
 for (const [name, file] of allImported) {
@@ -97,7 +97,7 @@ for (const [name, file] of allImported) {
 }
 
 const banner = `/*!
- * mini.js v2.4.0 — Run real AI models in your browser. One line of code.
+ * mini.js v2.0.0 — Run real AI models in your browser. One line of code.
  * A Transformers.js alternative written 100% from scratch: pure HTML/CSS/JS,
  * zero dependencies, no ONNX Runtime, no TensorFlow.js, no WebAssembly blobs.
  *
