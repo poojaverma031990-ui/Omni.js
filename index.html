@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>mini.js — Run AI in your browser with one line of code</title>
-<meta name="description" content="mini.js is a Transformers.js alternative written 100% from scratch in pure HTML/CSS/JS. Zero dependencies, no ONNX, no WebAssembly. GPT-2, BERT and more — right in your browser.">
+<meta name="description" content="mini.js is a Transformers.js alternative written 100% from scratch in pure HTML/CSS/JS. Zero dependencies, no ONNX, no WebAssembly. GPT-2, BERT and more — right in the browser.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -62,7 +62,7 @@ console.log(out.assistant_message);</pre>
 <section class="section alt" id="add">
   <div class="container">
     <h2>Add it to any site in 30 seconds</h2>
-    <p class="section-sub">One <code>&lt;script&gt;</code> tag — from GitHub Pages or jsDelivr, your choice. No npm, no build step, no keys. Works on plain HTML pages, React/Vue/Svelte apps, Web Workers (<code>importScripts</code>), and even <code>file://</code>.</p>
+    <p class="section-sub">One <code>&lt;script&gt;</code> tag — from GitHub Pages or jsDelivr, your choice. No npm, no build step, no keys. Works on plain HTML pages, React/Vue/Svelte apps, Web components and Web Workers.</p>
 
     <div class="install-box" style="max-width:none">
       <div class="install-row">
@@ -72,8 +72,8 @@ console.log(out.assistant_message);</pre>
       <pre class="install-code">&lt;!-- GitHub Pages (this site) --&gt;
 &lt;script src="https://poojaverma031990-ui.github.io/Omni.js/mini.js"&gt;&lt;/script&gt;
 
-&lt;!-- or jsDelivr CDN (pinned to v2.4.0) --&gt;
-&lt;script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@v2.4.0/mini.js"&gt;&lt;/script&gt;</pre>
+&lt;!-- or jsDelivr CDN (pinned to v2.0.0) --&gt;
+&lt;script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@v2.0.0/mini.js"&gt;&lt;/script&gt;</pre>
     </div>
 
     <div class="code-grid">
@@ -115,7 +115,7 @@ const [a] = await qa({ question: 'Who?', context: 'Ada Lovelace wrote the first 
 console.log(a.answer);">Copy</button>
       </div>
     </div>
-    <p class="section-sub" style="margin-top:18px">That's the whole integration. Models stream from huggingface.co (CORS-enabled), cache in the user's browser, and then run 100% on-device — your servers never see a byte of user data.</p>
+    <p class="section-sub" style="margin-top:18px">That's the whole integration. Models stream from huggingface.co (CORS-enabled), cache in the user's browser, and then run 100% on-device — you never need a backend or an API key.</p>
   </div>
 </section>
 
@@ -248,14 +248,14 @@ const [out] = await gen('Once upon a time', {
     <p class="section-sub">There is no ONNX Runtime here. No TensorFlow.js. No WebAssembly blobs. No native code.
       Each layer of the stack was built from nothing, in plain JavaScript.</p>
     <div class="feature-grid">
-      <div class="feature"><div class="ico">🧮</div><h3>Tensor engine</h3><p>An eager tensor class with two complete backends: blocked, unrolled Float32Array kernels for the CPU and RGBA32F texture kernels for the GPU.</p></div>
-      <div class="feature"><div class="ico">✨</div><h3>Hand-written GLSL</h3><p>Matmul (3 layouts), softmax, layernorm, GELU, embedding gathers, slicing and scatter — raw GLSL ES 3.00 fragment shaders over WebGL2 framebuffers.</p></div>
-      <div class="feature"><div class="ico">🔤</div><h3>Tokenizers from scratch</h3><p>Byte-level BPE (the GPT-2 byte↔unicode trick, merge ranks, pre-tokenizer regex) and WordPiece (greedy longest-match, ## prefixes) — parsing real <code>tokenizer.json</code>.</p></div>
-      <div class="feature"><div class="ico">📦</div><h3>safetensors parser</h3><p>Reads the safetensors binary format directly: JSON header + raw buffers, with F16 / BF16 / F32 decoding via bit manipulation.</p></div>
-      <div class="feature"><div class="ico">🤖</div><h3>Real transformers</h3><p>GPT-2 decoder with KV-cache and causal attention, BERT and DistilBERT encoders — attention heads, residuals, layer norms, all as explicit tensor ops.</p></div>
+      <div class="feature"><div class="ico">🧮</div><h3>Tensor engine</h3><p>An eager tensor class with two complete backends: blocked, unrolled Float32Array kernels for the CPU and RGBA32F textures on the GPU.</p></div>
+      <div class="feature"><div class="ico">✨</div><h3>Hand-written GLSL</h3><p>Matmul (3 layouts), softmax, layernorm, GELU, embedding gathers, slicing and scatter — raw GLSL ES 3.00 fragment shaders from scratch.</p></div>
+      <div class="feature"><div class="ico">🔤</div><h3>Tokenizers from scratch</h3><p>Byte-level BPE (the GPT-2 byte↔unicode trick, merge ranks, pre-tokenizer regex) and WordPiece (greedy longest-match, `##` prefixes, CJK/punct splitting).</p></div>
+      <div class="feature"><div class="ico">📦</div><h3>safetensors parser</h3><p>Reads the safetensors binary format directly: JSON header + raw buffers, with F16 / BF16 / F32 decoding via bit twiddling.</p></div>
+      <div class="feature"><div class="ico">🤖</div><h3>Real transformers</h3><p>GPT-2 decoder with KV-cache and causal attention, BERT and DistilBERT encoders — attention heads, residuals, layer norm, linear layers, all hand-written.</p></div>
       <div class="feature"><div class="ico">🎲</div><h3>Sampling engine</h3><p>Greedy, temperature, top-k, top-p (nucleus) and repetition penalty — the same toolbox the big libraries have.</p></div>
-      <div class="feature"><div class="ico">🌐</div><h3>Hub streaming + cache</h3><p>Streams model files from the Hugging Face Hub with progress callbacks and caches them in the browser, so the second run is instant and offline.</p></div>
-      <div class="feature"><div class="ico">🛡</div><h3>GPU self-test</h3><p>On load, every GPU kernel is verified against the CPU reference on known inputs. If anything is off, mini.js silently switches to CPU. Correctness first.</p></div>
+      <div class="feature"><div class="ico">🌐</div><h3>Hub streaming + cache</h3><p>Streams model files from the Hugging Face Hub with progress callbacks and caches them in the browser, so the first load is the only slow one.</p></div>
+      <div class="feature"><div class="ico">🛡</div><h3>GPU self-test</h3><p>On load, every GPU kernel is verified against the CPU reference on known inputs. If anything is off, mini.js silently falls back to CPU.</p></div>
     </div>
   </div>
 </section>

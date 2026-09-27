@@ -34,11 +34,11 @@ plain JavaScript and runs anywhere a browser runs — one `<script>` tag, anywhe
 |---|---|
 | **Tensor engine** | Eager tensor class with two full backends: blocked/unrolled `Float32Array` kernels (CPU) and WebGL2 kernels (GPU) |
 | **GPU kernels** | Hand-written GLSL ES 3.00: matmul (NN / transposed-B / transposed-storage), softmax, layernorm, GELU, ReLU, SiLU, sigmoid, tanh, embedding gathers, slice/scatter, mask add |
-| **Tokenizers** | Byte-level BPE (GPT-2 byte↔unicode map, merge ranks, pre-tokenizer regex) and WordPiece (greedy longest-match, `##` prefixes, CJK/punct splitting) — reading real `tokenizer.json` |
+| **Tokenizers** | Byte-level BPE (GPT-2 byte↔unicode map, merge ranks, pre-tokenizer regex) and WordPiece (greedy longest-match, `##` prefixes, CJK/punct splitting) — reading real `tokenizer.json` and `tokenizer_config.json` from HF |
 | **safetensors parser** | Reads the binary format directly: JSON header + raw buffers, F32 / F16 / BF16 decoding via bit manipulation |
-| **Models** | GPT-2 decoder (KV-cache), **LLAMA FAMILY: Llama / Mistral / Qwen2 / Qwen3 / Gemma 1-3** (RMSNorm, RoPE, SwiGLU/GeGLU, grouped-query attention, tied embeddings), **RoBERTa**, BERT, DistilBERT + classification / token-classification / QA-span / MLM heads |
+| **Models** | GPT-2 decoder (KV-cache), **LLAMA FAMILY: Llama / Mistral / Qwen2 / Qwen3 / Gemma 1-3** (RMSNorm, RoPE, SwiGLU/GeGLU, grouped-query attention, tied embeddings), **RoBERTa**, BERT, DistilBERT, ALBERT, XLM-RoBERTa |
 | **Generation** | Greedy, temperature, top-k, top-p (nucleus), repetition penalty, EOS stopping, streaming `onToken` (return `false` to **stop**), UI-yielding async loop |
-| **Hub client** | Streams files from huggingface.co with progress callbacks — **including sharded models** (`model.safetensors.index.json`) — caches in the browser → instant & offline after first run |
+| **Hub client** | Streams files from huggingface.co with progress callbacks — **including sharded models** (`model.safetensors.index.json`) — caches in the browser → instant & offline after first load |
 | **GPU self-test** | Every WebGL kernel (incl. RoPE / RMSNorm / mul) is verified against the CPU reference at load; mini.js silently falls back to CPU if anything disagrees |
 | **Chat templates** | A from-scratch Jinja2-subset renderer for the real `chat_template` files models ship, plus builtin ChatML / Llama-2 / Llama-3 / Gemma templates |
 
@@ -59,8 +59,8 @@ plain JavaScript and runs anywhere a browser runs — one `<script>` tag, anywhe
 **Or use it in ANY website or app with ONE line — no install at all:**
 
 ```html
-<!-- jsDelivr CDN, pinned to v2.4.0 -->
-<script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@v2.4.0/mini.js"></script>
+<!-- jsDelivr CDN, pinned to v2.0.0 -->
+<script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@v2.0.0/mini.js"></script>
 
 <!-- or GitHub Pages -->
 <script src="https://poojaverma031990-ui.github.io/Omni.js/mini.js"></script>
@@ -70,7 +70,7 @@ plain JavaScript and runs anywhere a browser runs — one `<script>` tag, anywhe
 ```
 
 ```html
-<script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@v2.4.0/mini.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@v2.0.0/mini.js"></script>
 <script>
   const llm = await mini.pipeline('text-generation', 'HuggingFaceTB/SmolLM2-135M-Instruct');
   const [out] = await llm.chat('Hello!');
@@ -79,7 +79,7 @@ plain JavaScript and runs anywhere a browser runs — one `<script>` tag, anywhe
 ```
 
 Works in plain HTML, React/Vue/Svelte (drop the tag in `index.html`), and web workers
-(`importScripts('https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@v2.4.0/mini.js')`
+(`importScripts('https://cdn.jsdelivr.net/gh/poojaverma031990-ui/Omni.js@v2.0.0/mini.js')`
 → `self.mini`). Live docs & playground: **https://poojaverma031990-ui.github.io/Omni.js/**
 
 **2. One-line convenience APIs**
@@ -176,6 +176,7 @@ const [out] = await llm.chat([{ role: 'user', content: 'Explain gravity simply.'
 console.log(out.assistant_message);
 
 > 💡 Models are downloaded **once**, stored in the browser Cache API, and then load instantly and work offline.
+```
 
 ## One-file evaluation demo
 

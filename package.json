@@ -1,7 +1,7 @@
 {
   "name": "mini.js",
-  "version": "2.4.0",
-  "description": "Run real AI models in your browser with one line of code. A Transformers.js alternative written 100% from scratch in pure HTML/CSS/JS \u2014 zero dependencies.",
+  "version": "2.0.0",
+  "description": "Run real AI models in your browser with one line of code. A Transformers.js alternative written 100% from scratch in pure HTML/CSS/JS — zero dependencies.",
   "type": "module",
   "main": "mini.js",
   "scripts": {

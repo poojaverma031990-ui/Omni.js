@@ -3,7 +3,7 @@
  * 100% from scratch. No dependencies.
  */
 
-export const MINI_VERSION = '2.4.0';
+export const MINI_VERSION = '2.0.0';
 
 export function assert(cond, msg) {
   if (!cond) throw new Error('[mini.js] ' + msg);
